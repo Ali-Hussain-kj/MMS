@@ -1,0 +1,103 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function hasRole(role) {
+      return signedIn()
+        && exists(userPath(request.auth.uid))
+        && get(userPath(request.auth.uid)).data.role == role;
+    }
+
+    function isAdmin() {
+      return hasRole('admin');
+    }
+
+    function isTeacher() {
+      return hasRole('teacher');
+    }
+
+    function isParentOf(studentId) {
+      // A parent can read a student only after an admin puts its ID on their profile.
+      return signedIn()
+        && request.auth.token.email_verified == true
+        && hasRole('parent')
+        && exists(/databases/$(database)/documents/students/$(studentId))
+        && get(userPath(request.auth.uid)).data.studentIds is list
+        && get(userPath(request.auth.uid)).data.studentIds.hasAny([studentId]);
+    }
+
+    function isSupportedReport(reportCollection) {
+      return reportCollection in ['attendance', 'hifzProgress', 'nazraProgress'];
+    }
+
+    match /users/{uid} {
+      // Admins may create a parent profile while approving that parent's student.
+      allow create: if isAdmin()
+        || (
+          signedIn()
+          && request.auth.uid == uid
+          && request.auth.token.email_verified == true
+          && request.resource.data.role == 'parent'
+          && request.resource.data.studentIds == []
+          && request.resource.data.email == request.auth.token.email
+          && request.resource.data.keys().hasOnly(['email', 'role', 'studentIds'])
+        );
+
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow update, delete: if isAdmin();
+    }
+
+    match /registrationRequests/{requestId} {
+      // Enrollment requests are submitted by the parent account and reviewed by admins.
+      allow create: if signedIn()
+        && request.resource.data.parentUid == request.auth.uid
+        && request.resource.data.parentEmail == request.auth.token.email
+        && request.resource.data.status == 'pending'
+        && request.resource.data.keys().hasOnly([
+          'studentName',
+          'fatherName',
+          'dateOfBirth',
+          'address',
+          'gmail',
+          'contactNumber',
+          'program',
+          'className',
+          'hostelStatus',
+          'parentUid',
+          'parentEmail',
+          'status',
+          'submittedAt'
+        ]);
+      allow read, update, delete: if isAdmin();
+    }
+
+    match /students/{studentId} {
+      // Parent reads are restricted to linked students; only staff can change student data.
+      allow read: if isAdmin() || isTeacher() || isParentOf(studentId);
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin()
+        || (
+          isTeacher()
+          && resource.data.program == 'asri-taleem-class-1-10'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['className'])
+          && request.resource.data.className in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+        );
+
+      match /{reportCollection}/{reportId} {
+        // Reports inherit the same student-level access rule; parents cannot write reports.
+        allow read: if isSupportedReport(reportCollection)
+          && (isAdmin() || isTeacher() || isParentOf(studentId));
+        allow create, update: if isSupportedReport(reportCollection)
+          && (isAdmin() || (isTeacher() && request.resource.data.studentId == studentId));
+        allow delete: if isSupportedReport(reportCollection) && (isAdmin() || isTeacher());
+      }
+    }
+  }
+}
