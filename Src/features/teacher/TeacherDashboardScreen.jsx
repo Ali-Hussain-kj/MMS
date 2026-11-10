@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Image,
   Pressable,
@@ -21,6 +21,15 @@ const tabs = [
   { id: 'takrar', label: 'Takrar' },
   { id: 'school', label: 'School' },
 ];
+
+const tabPrograms = {
+  attendance: null,
+  quran: ['hifz-ul-quran'],
+  nazra: ['nazra-quran'],
+  dars: ['dars-e-nizami'],
+  takrar: ['dars-e-nizami'],
+  school: ['asri-taleem-class-1-10'],
+};
 
 // Map internal tab IDs to language dictionary keys.
 const tabStringKeys = {
@@ -48,7 +57,25 @@ const attendanceStringKeys = {
 const fluencyLevels = ['Excellent', 'Good', 'Needs practice'];
 
 function today() {
-  return new Date().toISOString().slice(0, 10);
+  const date = new Date();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function isValidDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) {
+    return false;
+  }
+
+  const [, year, month, day] = match;
+  const date = new Date(Number(year), Number(month) - 1, Number(day));
+  return (
+    date.getFullYear() === Number(year) &&
+    date.getMonth() === Number(month) - 1 &&
+    date.getDate() === Number(day)
+  );
 }
 
 function Field({
@@ -78,7 +105,15 @@ function Field({
   );
 }
 
-function Button({ label, onPress, testID, secondary, danger, disabled }) {
+function Button({
+  label,
+  onPress,
+  testID,
+  secondary,
+  danger,
+  disabled,
+  compact,
+}) {
   return (
     <Pressable
       accessibilityRole="button"
@@ -89,6 +124,7 @@ function Button({ label, onPress, testID, secondary, danger, disabled }) {
         secondary && styles.secondaryButton,
         danger && styles.dangerButton,
         disabled && styles.disabledButton,
+        compact && styles.compactButton,
       ]}
       testID={testID}>
       <Text
@@ -208,7 +244,10 @@ export default function TeacherDashboardScreen({
 }) {
   const strings = getStrings(language);
   // The teacher board always uses the live student list supplied by the app.
-  const students = registeredStudents;
+  const students = useMemo(
+    () => registeredStudents || [],
+    [registeredStudents],
+  );
 
   // Keep the selected student and each teaching module's form/report data in state.
   const [activeTab, setActiveTab] = useState('attendance');
@@ -275,15 +314,30 @@ export default function TeacherDashboardScreen({
 
   const activeStudent =
     students.find(student => student.id === selectedStudentId) || students[0];
-  // Each learning tab is available only to students enrolled in that program.
-  const tabPrograms = {
-    attendance: null,
-    quran: ['hifz-ul-quran'],
-    nazra: ['nazra-quran'],
-    dars: ['dars-e-nizami'],
-    takrar: ['dars-e-nizami'],
-    school: ['asri-taleem-class-1-10'],
-  };
+  useEffect(() => {
+    const currentStudent =
+      students.find(student => student.id === selectedStudentId) || students[0];
+
+    if (!currentStudent) {
+      if (selectedStudentId) {
+        setSelectedStudentId('');
+      }
+      if (activeTab !== 'attendance') {
+        setActiveTab('attendance');
+      }
+      return;
+    }
+
+    if (currentStudent.id !== selectedStudentId) {
+      setSelectedStudentId(currentStudent.id);
+    }
+
+    const allowedPrograms = tabPrograms[activeTab];
+    if (allowedPrograms && !allowedPrograms.includes(currentStudent.program)) {
+      setActiveTab('attendance');
+    }
+  }, [activeTab, selectedStudentId, students]);
+
   const isTabAvailable = tab =>
     Boolean(activeStudent) &&
     (!tabPrograms[tab.id] || tabPrograms[tab.id].includes(activeStudent.program));
@@ -306,6 +360,12 @@ export default function TeacherDashboardScreen({
     record =>
       record.studentId === activeStudent?.id && record.className === schoolClass,
   );
+  const markedStudentCount = students.filter(student =>
+    attendance.some(
+      record =>
+        record.studentId === student.id && record.date === attendanceDate,
+    ),
+  ).length;
 
   // Derive the selected student's records so one student's activity is not mixed with another's.
   const latestQuran = useMemo(() => studentQuran.slice().reverse(), [studentQuran]);
@@ -331,6 +391,10 @@ export default function TeacherDashboardScreen({
       setNotice('Add or approve a student before marking attendance.');
       return;
     }
+    if (!isValidDate(attendanceDate)) {
+      setNotice('Enter a valid attendance date in YYYY-MM-DD format.');
+      return;
+    }
     // A student's date is the unique key, so marking again updates that day's status.
     const record = {
       id: `${student.id}-${attendanceDate}`,
@@ -353,6 +417,10 @@ export default function TeacherDashboardScreen({
   }
 
   function generateAttendanceReport() {
+    if (!isValidDate(attendanceDate)) {
+      setNotice('Enter a valid attendance date in YYYY-MM-DD format.');
+      return;
+    }
     // Count each attendance status for the selected month.
     const totals = attendanceTypes.reduce(
       (result, type) => ({
@@ -595,13 +663,6 @@ export default function TeacherDashboardScreen({
         <SectionTitle
           title="Daily attendance"
           subtitle={strings.markAttendanceForDate}
-        />
-        <Field
-          label="Attendance date"
-          value={attendanceDate}
-          placeholder="YYYY-MM-DD"
-          onChangeText={setAttendanceDate}
-          testID="attendance-date"
         />
         <View style={styles.actionRow}>
           <Button
@@ -901,25 +962,56 @@ export default function TeacherDashboardScreen({
           <Text style={styles.eyebrow}>{strings.teacherSpace.toUpperCase()}</Text>
           <Text style={styles.title}>{strings.teacherDashboard}</Text>
         </View>
-        <Button label={strings.logOut} onPress={onBack} secondary testID="teacher-exit" />
+        <Button
+          compact
+          label={strings.logOut}
+          onPress={onBack}
+          secondary
+          testID="teacher-exit"
+        />
       </View>
       <View style={styles.attendanceBoard}>
         <View style={styles.attendanceBoardHeader}>
-          <Text style={styles.attendanceBoardTitle}>{strings.attendanceBoard}</Text>
-          <Text style={styles.attendanceBoardDate}>{attendanceDate}</Text>
+          <View style={styles.attendanceBoardHeading}>
+            <Text style={styles.attendanceBoardTitle}>{strings.attendanceBoard}</Text>
+            <Text style={styles.attendanceBoardDate}>
+              {activeStudent
+                ? getProgramLabel(activeStudent.program)
+                : ''}
+            </Text>
+          </View>
+          <View style={styles.attendanceDateControl}>
+            <Text style={styles.attendanceDateLabel}>{strings.attendanceDate}</Text>
+            <TextInput
+              accessibilityLabel="Attendance date"
+              autoCapitalize="none"
+              maxLength={10}
+              onChangeText={value => {
+                setAttendanceDate(value);
+                setNotice('');
+              }}
+              placeholder="YYYY-MM-DD"
+              style={styles.attendanceDateInput}
+              testID="attendance-date"
+              value={attendanceDate}
+            />
+          </View>
         </View>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.attendanceCards}
           testID="teacher-student-attendance-list">
-          {students.map(student => {
+          {students.length === 0 ? (
+            <Text style={styles.attendanceEmpty}>{strings.noStudentsForTeacher}</Text>
+          ) : (
+            students.map(student => {
             // Read this student's status for the current date before rendering the buttons.
             const isSelected = selectedStudentId === student.id;
             const dayRecord = attendance.find(
               record => record.studentId === student.id && record.date === attendanceDate,
             );
-            const initials = student.studentName
+            const initials = (student.studentName || '?')
               .split(/\s+/)
               .slice(0, 2)
               .map(part => part[0])
@@ -1007,15 +1099,30 @@ export default function TeacherDashboardScreen({
                 </View>
               </View>
             );
-          })}
+            })
+          )}
         </ScrollView>
-        {activeStudent ? (
-          <Text style={styles.selectedProgram}>
-            {getProgramLabel(activeStudent.program)}
+        <View style={styles.attendanceProgress}>
+          <View style={styles.attendanceProgressTrack}>
+            {Array.from({ length: 10 }, (_, index) => (
+              <View
+                key={index}
+                style={[
+                  styles.attendanceProgressSegment,
+                  index <
+                    (students.length
+                      ? Math.ceil((markedStudentCount / students.length) * 10)
+                      : 0) && styles.attendanceProgressSegmentFilled,
+                ]}
+              />
+            ))}
+          </View>
+          <Text style={styles.attendanceProgressLabel} testID="teacher-attendance-progress">
+            {strings.attendanceProgress
+              .replace('{marked}', String(markedStudentCount))
+              .replace('{total}', String(students.length))}
           </Text>
-        ) : (
-          <Text style={styles.notice}>{strings.noStudentsForTeacher}</Text>
-        )}
+        </View>
       </View>
       <Text style={styles.liveDataNotice}>
         {strings.teacherLiveNotice}
@@ -1071,7 +1178,10 @@ export default function TeacherDashboardScreen({
           );
         })}
       </ScrollView>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        style={styles.contentScroll}>
         {activeStudent ? content() : null}
       </ScrollView>
     </SafeAreaView>

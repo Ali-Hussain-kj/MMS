@@ -4,16 +4,27 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import LanguageToggle from './Src/components/LanguageToggle';
 import appStyles from './Src/components/styles';
 import AdminDashboardScreen from './Src/features/admin/AdminDashboardScreen';
+import HostelAdminDashboardScreen from './Src/features/admin/HostelAdminDashboardScreen';
 import ParentMonitoringScreen from './Src/features/parent/ParentMonitoringScreen';
 import RoleSelectionScreen from './Src/features/roles/RoleSelectionScreen';
 import TeacherDashboardScreen from './Src/features/teacher/TeacherDashboardScreen';
 import {
   approveRegistrationRequest,
+  allocateApprovedHostelRequest,
+  allocateHostelRoom,
   createParentAccount,
+  createHostelRoom,
   declineRegistrationRequest,
+  recordHostelVisitor,
+  reviewHostelRequest,
   removeStudent as removeStudentRecord,
   saveStudent as saveStudentRecord,
+  saveHostelMeals,
+  saveHostelAttendance,
   signOutUser,
+  subscribeToHostelCollection,
+  subscribeToHostelRequests,
+  subscribeToHostelStudents,
   subscribeToRegistrationRequests,
   subscribeToStudents,
   updateStudentClass,
@@ -24,20 +35,43 @@ export default function App() {
   const [language, setLanguage] = useState('en');
   const [registrationRequests, setRegistrationRequests] = useState([]);
   const [students, setStudents] = useState([]);
+  const [hostelStudents, setHostelStudents] = useState([]);
   const [teachers, setTeachers] = useState([]);
+  const [hostelRooms, setHostelRooms] = useState([]);
+  const [hostelRegistrations, setHostelRegistrations] = useState([]);
+  const [hostelRequests, setHostelRequests] = useState([]);
+  const [hostelMeals, setHostelMeals] = useState([]);
+  const [hostelAttendance, setHostelAttendance] = useState([]);
+  const [hostelVisitors, setHostelVisitors] = useState([]);
   const [authSession, setAuthSession] = useState(null);
   const [backendNotice, setBackendNotice] = useState('');
 
   useEffect(() => {
-    if (!authSession || !['admin', 'teacher'].includes(authSession.role)) {
+    if (
+      !authSession ||
+      !['admin', 'hostelAdmin', 'teacher'].includes(authSession.role)
+    ) {
       return undefined;
     }
 
-    // Admins and teachers get the staff student list; parent data is fetched separately.
-    const unsubscribeStudents = subscribeToStudents(setStudents, error =>
-      setBackendNotice(error.message),
+    if (authSession.role === 'hostelAdmin') {
+      const unsubscribeHostelStudents = subscribeToHostelStudents(
+        setHostelStudents,
+        error => setBackendNotice(error.message),
+      );
+      const unsubscribeHostelData = subscribeToHostelData();
+      return () => {
+        unsubscribeHostelStudents();
+        unsubscribeHostelData();
+      };
+    }
+
+    const unsubscribeStudents = subscribeToStudents(
+      setStudents,
+      error => setBackendNotice(error.message),
+      { syncHostelRoster: authSession.role === 'admin' },
     );
-    if (authSession.role !== 'admin') {
+    if (authSession.role === 'teacher') {
       return unsubscribeStudents;
     }
 
@@ -45,11 +79,54 @@ export default function App() {
       setRegistrationRequests,
       error => setBackendNotice(error.message),
     );
+    const unsubscribeHostelData = subscribeToHostelData();
     return () => {
       unsubscribeStudents();
       unsubscribeRequests();
+      unsubscribeHostelData();
     };
   }, [authSession]);
+
+  function subscribeToHostelData() {
+    const onError = error => setBackendNotice(error.message);
+    const unsubscribeRooms = subscribeToHostelCollection(
+      'hostelRooms',
+      setHostelRooms,
+      onError,
+    );
+    const unsubscribeRegistrations = subscribeToHostelCollection(
+      'hostelRegistrations',
+      setHostelRegistrations,
+      onError,
+    );
+    const unsubscribeAttendance = subscribeToHostelCollection(
+      'hostelAttendance',
+      setHostelAttendance,
+      onError,
+    );
+    const unsubscribeMeals = subscribeToHostelCollection(
+      'hostelMeals',
+      setHostelMeals,
+      onError,
+    );
+    const unsubscribeVisitors = subscribeToHostelCollection(
+      'hostelVisitors',
+      setHostelVisitors,
+      onError,
+    );
+    const unsubscribeRequests = subscribeToHostelRequests(
+      setHostelRequests,
+      onError,
+    );
+    return () => {
+      unsubscribeRooms();
+      unsubscribeRegistrations();
+      unsubscribeAttendance();
+      unsubscribeMeals();
+      unsubscribeVisitors();
+      unsubscribeRequests();
+    };
+  }
 
   function handleAuthentication(session) {
     setAuthSession(session);
@@ -67,7 +144,14 @@ export default function App() {
     }
     setAuthSession(null);
     setStudents([]);
+    setHostelStudents([]);
     setRegistrationRequests([]);
+    setHostelRooms([]);
+    setHostelRegistrations([]);
+    setHostelRequests([]);
+    setHostelMeals([]);
+    setHostelAttendance([]);
+    setHostelVisitors([]);
     setActiveScreen('roles');
   }
 
@@ -173,6 +257,26 @@ export default function App() {
             backendNotice={backendNotice}
             isAuthenticated={authSession?.role === 'teacher'}
           />
+        ) : activeScreen === 'hostelAdmin' && authSession ? (
+          <HostelAdminDashboardScreen
+            language={language}
+            onSignOut={returnToRoles}
+            students={hostelStudents}
+            rooms={hostelRooms}
+            registrations={hostelRegistrations}
+            requests={hostelRequests}
+            attendance={hostelAttendance}
+            meals={hostelMeals}
+            visitors={hostelVisitors}
+            backendNotice={backendNotice}
+            onCreateRoom={createHostelRoom}
+            onAllocateRoom={allocateHostelRoom}
+            onReviewRequest={reviewHostelRequest}
+            onAllocateRequest={allocateApprovedHostelRequest}
+            onSaveAttendance={saveHostelAttendance}
+            onSaveMeals={saveHostelMeals}
+            onRecordVisitor={recordHostelVisitor}
+          />
         ) : activeScreen === 'admin' ? (
           <AdminDashboardScreen
             language={language}
@@ -190,6 +294,19 @@ export default function App() {
             students={students}
             teachers={teachers}
             backendNotice={backendNotice}
+            hostelRooms={hostelRooms}
+            hostelRegistrations={hostelRegistrations}
+            hostelRequests={hostelRequests}
+            hostelAttendance={hostelAttendance}
+            hostelMeals={hostelMeals}
+            hostelVisitors={hostelVisitors}
+            onCreateHostelRoom={createHostelRoom}
+            onAllocateHostelRoom={allocateHostelRoom}
+            onReviewHostelRequest={reviewHostelRequest}
+            onAllocateHostelRequest={allocateApprovedHostelRequest}
+            onSaveHostelMeals={saveHostelMeals}
+            onSaveHostelAttendance={saveHostelAttendance}
+            onRecordHostelVisitor={recordHostelVisitor}
           />
         ) : (
           <RoleSelectionScreen

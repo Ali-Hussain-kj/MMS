@@ -197,6 +197,11 @@ const styles = StyleSheet.create({
     marginTop: 14,
     textAlign: 'center',
   },
+  passwordResetButton: {
+    alignSelf: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+  },
   registerFooter: {
     alignItems: 'center',
     flexDirection: 'row',

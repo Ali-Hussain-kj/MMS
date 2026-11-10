@@ -52,6 +52,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#E8EFEB',
     borderRadius: 12,
     flexDirection: 'row',
+    flexWrap: 'wrap',
     marginBottom: 22,
     marginTop: 20,
     padding: 4,
@@ -59,7 +60,8 @@ const styles = StyleSheet.create({
   tab: {
     alignItems: 'center',
     borderRadius: 9,
-    flex: 1,
+    flexBasis: '32%',
+    flexGrow: 1,
     justifyContent: 'center',
     minHeight: 42,
     paddingHorizontal: 4,
@@ -76,6 +78,34 @@ const styles = StyleSheet.create({
   tabTextActive: {
     color: '#0B6B4B',
     fontWeight: '800',
+  },
+  hostelTabs: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 14,
+    marginTop: 12,
+  },
+  hostelChoiceRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  hostelChoiceSelected: {
+    backgroundColor: '#0B6B4B',
+  },
+  hostelChoiceTextSelected: {
+    color: '#FFFFFF',
+  },
+  hostelHint: {
+    color: '#53655B',
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 8,
+  },
+  hostelEmpty: {
+    color: '#718078',
+    fontSize: 13,
+    lineHeight: 19,
+    marginBottom: 14,
   },
   metricRow: {
     flexDirection: 'row',

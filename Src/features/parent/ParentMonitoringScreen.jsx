@@ -2,7 +2,11 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import getStrings from '../../localization';
-import { subscribeToParentReports } from '../../services/firebase/parentMonitoring';
+import {
+  createParentHostelRequest,
+  subscribeToParentHostelRequests,
+  subscribeToParentReports,
+} from '../../services/firebase/parentMonitoring';
 import styles from './styles';
 
 const periods = ['daily', 'weekly', 'monthly'];
@@ -58,6 +62,10 @@ export default function ParentMonitoringScreen({ language, user, onSignOut }) {
   const [period, setPeriod] = useState('monthly');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [hostelRequests, setHostelRequests] = useState([]);
+  const [hostelRequestMessage, setHostelRequestMessage] = useState('');
+  const [isSubmittingHostelRequest, setIsSubmittingHostelRequest] =
+    useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -81,7 +89,23 @@ export default function ParentMonitoringScreen({ language, user, onSignOut }) {
     );
   }, [user.uid]);
 
+  useEffect(
+    () =>
+      subscribeToParentHostelRequests(
+        user.uid,
+        setHostelRequests,
+        subscriptionError => setError(subscriptionError.message),
+      ),
+    [user.uid],
+  );
+
   const child = children.find(report => report.student.id === selectedChildId);
+  const requestsByStudent = hostelRequests.reduce((requestsById, request) => {
+    if (!requestsById.has(request.studentId)) {
+      requestsById.set(request.studentId, request);
+    }
+    return requestsById;
+  }, new Map());
   // Filter the selected child's downloaded attendance for the chosen time period.
   const attendance = useMemo(
     () =>
@@ -95,6 +119,23 @@ export default function ParentMonitoringScreen({ language, user, onSignOut }) {
   const completedPages = new Set(
     nazraProgress.map(record => record.page).filter(Boolean),
   ).size;
+
+  async function submitHostelRequest(student) {
+    setHostelRequestMessage('');
+    setIsSubmittingHostelRequest(true);
+    try {
+      await createParentHostelRequest(
+        student.id,
+        user.uid,
+        student.hostelStatus === 'resident' ? 'cancellation' : 'admission',
+      );
+      setHostelRequestMessage(strings.hostelRequestSubmitted);
+    } catch (requestError) {
+      setHostelRequestMessage(requestError.message);
+    } finally {
+      setIsSubmittingHostelRequest(false);
+    }
+  }
 
   // The chosen child and period below control which reports are displayed.
   return (
@@ -121,6 +162,41 @@ export default function ParentMonitoringScreen({ language, user, onSignOut }) {
         {error ? (
           <Text accessibilityRole="alert" style={styles.error}>
             {error}
+          </Text>
+        ) : null}
+        <Text style={styles.sectionTitle}>{strings.hostelRequests}</Text>
+        {hostelRequests.length === 0 ? (
+          <Text style={styles.emptyText}>{strings.noParentHostelRequests}</Text>
+        ) : (
+          hostelRequests.map(request => (
+            <View key={request.id} style={styles.reportCard}>
+              <Text style={styles.reportTitle}>
+                {request.studentName} ·{' '}
+                {request.requestType === 'cancellation'
+                  ? strings.hostelCancellationRequest
+                  : strings.hostelAdmissionRequest}
+              </Text>
+              <Text style={styles.reportDetail}>
+                {strings.requestStatus}: {strings[request.status] || request.status}
+              </Text>
+              {request.allocatedAt ? (
+                <Text style={styles.reportDetail}>
+                  {strings.allocatedRoomDetails}: {request.roomNumber}, {strings.floor} {request.floor}, {strings.bedNumber} {request.bedNumber}
+                </Text>
+              ) : null}
+              {request.status === 'approved' &&
+              request.requestType === 'admission' &&
+              !request.allocatedAt ? (
+                <Text style={styles.reportDetail}>
+                  {strings.hostelApprovalWaitingForRoom}
+                </Text>
+              ) : null}
+            </View>
+          ))
+        )}
+        {hostelRequestMessage ? (
+          <Text accessibilityRole="alert" style={styles.error}>
+            {hostelRequestMessage}
           </Text>
         ) : null}
         {loading ? (
@@ -178,6 +254,43 @@ export default function ParentMonitoringScreen({ language, user, onSignOut }) {
 
             {child ? (
               <>
+                <View style={styles.hostelRequestPanel}>
+                  <Text style={styles.sectionTitle}>{strings.hostelManagement}</Text>
+                  <Text style={styles.reportDetail}>
+                    {strings.hostelStatus}: {child.student.hostelStatus === 'resident' ? strings.hostelResident : strings.dayStudent}
+                  </Text>
+                  {requestsByStudent.get(child.student.id)?.allocatedAt ? (
+                    <Text style={styles.reportDetail}>
+                      {strings.allocatedRoomDetails}:{' '}
+                      {requestsByStudent.get(child.student.id).roomNumber},{' '}
+                      {strings.floor}{' '}
+                      {requestsByStudent.get(child.student.id).floor},{' '}
+                      {strings.bedNumber}{' '}
+                      {requestsByStudent.get(child.student.id).bedNumber}
+                    </Text>
+                  ) : null}
+                  {requestsByStudent.get(child.student.id)?.status === 'pending' ||
+                  (requestsByStudent.get(child.student.id)?.status === 'approved' &&
+                    requestsByStudent.get(child.student.id)?.requestType === 'admission' &&
+                    !requestsByStudent.get(child.student.id)?.allocatedAt) ? (
+                    <Text style={styles.reportDetail}>
+                      {strings.hostelRequestInProgress}
+                    </Text>
+                  ) : (
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={isSubmittingHostelRequest}
+                      onPress={() => submitHostelRequest(child.student)}
+                      style={styles.hostelRequestButton}
+                      testID="parent-hostel-request">
+                      <Text style={styles.hostelRequestButtonText}>
+                        {child.student.hostelStatus === 'resident'
+                          ? strings.requestHostelCancellation
+                          : strings.requestHostelAdmission}
+                      </Text>
+                    </Pressable>
+                  )}
+                </View>
                 <View style={styles.sectionHeader}>
                   <Text style={styles.sectionTitle}>{strings.attendance}</Text>
                   <Text style={styles.sectionCaption}>

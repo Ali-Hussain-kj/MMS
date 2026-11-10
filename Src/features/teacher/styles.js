@@ -3,15 +3,15 @@ import { StyleSheet } from 'react-native';
 // Styles for teacher navigation, the attendance board, and learning record forms.
 const styles = StyleSheet.create({
   safeArea: {
-    backgroundColor: '#F4F8F5',
+    backgroundColor: '#F5F8F6',
     flex: 1,
   },
   header: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingHorizontal: 18,
-    paddingTop: 54,
+    paddingHorizontal: 20,
+    paddingTop: 10,
   },
   headerText: {
     flex: 1,
@@ -24,7 +24,7 @@ const styles = StyleSheet.create({
   },
   title: {
     color: '#17352B',
-    fontSize: 23,
+    fontSize: 25,
     fontWeight: '800',
     marginTop: 4,
   },
@@ -72,12 +72,16 @@ const styles = StyleSheet.create({
     marginTop: 7,
   },
   liveDataNotice: {
-    backgroundColor: '#FFF4DF',
-    color: '#79520D',
+    backgroundColor: '#E8F3EE',
+    borderRadius: 10,
+    color: '#20563F',
     fontSize: 11,
     lineHeight: 16,
-    paddingHorizontal: 18,
-    paddingVertical: 8,
+    marginHorizontal: 16,
+    marginTop: 10,
+    overflow: 'hidden',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
   },
   notice: {
     backgroundColor: '#E3F2EC',
@@ -90,23 +94,26 @@ const styles = StyleSheet.create({
   },
   tabsScroll: {
     flexGrow: 0,
-    marginTop: 8,
+    marginTop: 12,
     maxHeight: 52,
   },
   tabs: {
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
   },
   tab: {
     alignItems: 'center',
-    backgroundColor: '#E8EFEB',
-    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E0E9E3',
+    borderRadius: 20,
+    borderWidth: 1,
     justifyContent: 'center',
-    marginHorizontal: 4,
-    minHeight: 38,
-    paddingHorizontal: 14,
+    marginRight: 8,
+    minHeight: 40,
+    paddingHorizontal: 16,
   },
   tabActive: {
     backgroundColor: '#0B6B4B',
+    borderColor: '#0B6B4B',
   },
   tabDisabled: {
     backgroundColor: '#ECEFED',
@@ -130,8 +137,12 @@ const styles = StyleSheet.create({
     paddingTop: 7,
   },
   content: {
-    padding: 18,
-    paddingBottom: 34,
+    paddingHorizontal: 18,
+    paddingTop: 8,
+    paddingBottom: 36,
+  },
+  contentScroll: {
+    flex: 1,
   },
   sectionHeading: {
     marginBottom: 10,
@@ -210,6 +221,13 @@ const styles = StyleSheet.create({
     marginTop: 12,
     minHeight: 46,
     paddingHorizontal: 15,
+  },
+  compactButton: {
+    marginBottom: 0,
+    marginRight: 0,
+    marginTop: 0,
+    minHeight: 40,
+    paddingHorizontal: 13,
   },
   buttonText: {
     color: '#FFFFFF',
@@ -370,41 +388,77 @@ const styles = StyleSheet.create({
     padding: 14,
   },
   attendanceBoard: {
-    backgroundColor: '#F4F8F5',
-    paddingBottom: 8,
-    paddingTop: 10,
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E3EBE6',
+    borderRadius: 18,
+    borderWidth: 1,
+    marginHorizontal: 14,
+    marginTop: 14,
+    paddingBottom: 14,
+    paddingTop: 14,
   },
   attendanceBoardHeader: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 9,
+    paddingHorizontal: 14,
+    paddingBottom: 12,
+  },
+  attendanceBoardHeading: {
+    flex: 1,
+    paddingRight: 8,
   },
   attendanceBoardTitle: {
     color: '#17352B',
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '800',
   },
   attendanceBoardDate: {
     color: '#718078',
-    fontSize: 11,
+    fontSize: 10,
+    marginTop: 4,
+  },
+  attendanceEmpty: {
+    color: '#718078',
+    fontSize: 12,
+    lineHeight: 18,
+    paddingHorizontal: 2,
+    paddingVertical: 8,
+  },
+  attendanceDateControl: {
+    width: 126,
+  },
+  attendanceDateLabel: {
+    color: '#718078',
+    fontSize: 10,
     fontWeight: '700',
+    marginBottom: 4,
+  },
+  attendanceDateInput: {
+    backgroundColor: '#F5F8F6',
+    borderColor: '#DCE4E0',
+    borderRadius: 9,
+    borderWidth: 1,
+    color: '#17352B',
+    fontSize: 12,
+    height: 38,
+    paddingHorizontal: 8,
   },
   attendanceCards: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
   },
   attendanceStudentCard: {
     backgroundColor: '#FFFFFF',
-    borderColor: '#DCE4E0',
-    borderRadius: 14,
+    borderColor: '#E0E9E3',
+    borderRadius: 15,
     borderWidth: 1,
-    marginRight: 10,
-    padding: 12,
-    width: 290,
+    marginRight: 9,
+    padding: 11,
+    width: 276,
   },
   attendanceStudentCardSelected: {
     borderColor: '#0B6B4B',
+    borderWidth: 1.5,
   },
   studentProfile: {
     alignItems: 'center',
@@ -463,7 +517,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     marginRight: 6,
-    minHeight: 36,
+    minHeight: 40,
     paddingHorizontal: 4,
   },
   attendanceStatusChoiceSelected: {
@@ -477,6 +531,29 @@ const styles = StyleSheet.create({
   },
   attendanceStatusChoiceTextSelected: {
     color: '#FFFFFF',
+  },
+  attendanceProgress: {
+    paddingHorizontal: 14,
+    paddingTop: 12,
+  },
+  attendanceProgressTrack: {
+    flexDirection: 'row',
+    height: 6,
+  },
+  attendanceProgressSegment: {
+    backgroundColor: '#E8EFEB',
+    borderRadius: 3,
+    flex: 1,
+    marginRight: 3,
+  },
+  attendanceProgressSegmentFilled: {
+    backgroundColor: '#0B6B4B',
+  },
+  attendanceProgressLabel: {
+    color: '#53655B',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 7,
   },
 });
 

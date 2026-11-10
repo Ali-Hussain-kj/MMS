@@ -4,6 +4,10 @@ import { Text } from 'react-native';
 import ParentMonitoringScreen from '../Src/features/parent/ParentMonitoringScreen';
 import TeacherDashboardScreen from '../Src/features/teacher/TeacherDashboardScreen';
 import { subscribeToParentReports } from '../Src/services/firebase/parentMonitoring';
+import {
+  createParentHostelRequest,
+  subscribeToParentHostelRequests,
+} from '../Src/services/firebase/parentMonitoring';
 
 jest.mock('react-native-safe-area-context', () => {
   const ReactNative = require('react-native');
@@ -14,6 +18,8 @@ jest.mock('react-native-safe-area-context', () => {
 });
 
 jest.mock('../Src/services/firebase/parentMonitoring', () => ({
+  createParentHostelRequest: jest.fn(),
+  subscribeToParentHostelRequests: jest.fn(),
   subscribeToParentReports: jest.fn(),
   saveTeacherReport: jest.fn(),
 }));
@@ -55,6 +61,10 @@ test('parent sees only linked-child daily, weekly, monthly, Hifz, and Nazra repo
     ]);
     return jest.fn();
   });
+  subscribeToParentHostelRequests.mockImplementation((_uid, onChange) => {
+    onChange([]);
+    return jest.fn();
+  });
 
   let renderer;
   ReactTestRenderer.act(() => {
@@ -92,6 +102,55 @@ test('parent sees only linked-child daily, weekly, monthly, Hifz, and Nazra repo
           typeof text.props.children === 'string' &&
           text.props.children.includes('Clear reading'),
       ),
+  ).toBe(true);
+});
+
+test('parent can request hostel admission for a linked day student', async () => {
+  subscribeToParentReports.mockImplementation((_uid, onChange) => {
+    onChange([
+      {
+        student: {
+          id: 'day-child',
+          studentName: 'Amina Ahmed',
+          hostelStatus: 'day',
+        },
+        attendance: [],
+        hifzProgress: [],
+        nazraProgress: [],
+      },
+    ]);
+    return jest.fn();
+  });
+  subscribeToParentHostelRequests.mockImplementation((_uid, onChange) => {
+    onChange([]);
+    return jest.fn();
+  });
+
+  let renderer;
+  ReactTestRenderer.act(() => {
+    renderer = ReactTestRenderer.create(
+      <ParentMonitoringScreen
+        language="en"
+        user={{ uid: 'parent-1', email: 'parent@example.com' }}
+        onSignOut={jest.fn()}
+      />,
+    );
+  });
+  await ReactTestRenderer.act(async () => {
+    await renderer.root
+      .findByProps({ testID: 'parent-hostel-request' })
+      .props.onPress();
+  });
+
+  expect(createParentHostelRequest).toHaveBeenCalledWith(
+    'day-child',
+    'parent-1',
+    'admission',
+  );
+  expect(
+    renderer.root
+      .findAllByType(Text)
+      .some(text => text.props.children === 'Hostel request submitted for review.'),
   ).toBe(true);
 });
 

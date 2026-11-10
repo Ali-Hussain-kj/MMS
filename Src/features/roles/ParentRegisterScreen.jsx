@@ -262,7 +262,7 @@ export default function ParentRegisterScreen({
           <View style={styles.hostelOptions}>
             {[
               { id: 'day', label: strings.dayStudent },
-              { id: 'resident', label: strings.hostelResident },
+              { id: 'resident', label: strings.hostelStudentOption },
             ].map(status => {
               const isSelected = hostelStatus === status.id;
 
@@ -292,6 +292,11 @@ export default function ParentRegisterScreen({
               );
             })}
           </View>
+          {hostelStatus === 'resident' ? (
+            <Text style={styles.fieldHint}>
+              {strings.hostelRequestCreatedOnRegistration}
+            </Text>
+          ) : null}
 
           <Pressable
             accessibilityRole="button"

@@ -7,17 +7,34 @@ import ReactTestRenderer from 'react-test-renderer';
 import { Text } from 'react-native';
 import App from '../App';
 import TeacherDashboardScreen from '../Src/features/teacher/TeacherDashboardScreen';
-import { createParentAccount } from '../Src/services/firebase/parentMonitoring';
+import {
+  createParentAccount,
+  sendParentPasswordReset,
+  signInForRole,
+} from '../Src/services/firebase/parentMonitoring';
 
 jest.mock('../Src/services/firebase/parentMonitoring', () => ({
   approveRegistrationRequest: jest.fn(),
   createParentAccount: jest.fn().mockResolvedValue(undefined),
   declineRegistrationRequest: jest.fn(),
+  allocateHostelRoom: jest.fn(),
+  allocateApprovedHostelRequest: jest.fn(),
+  createParentHostelRequest: jest.fn().mockResolvedValue(undefined),
+  createHostelRoom: jest.fn(),
+  recordHostelVisitor: jest.fn(),
   removeStudent: jest.fn(),
   saveStudent: jest.fn(),
+  saveHostelMeals: jest.fn(),
+  saveHostelAttendance: jest.fn(),
+  reviewHostelRequest: jest.fn().mockResolvedValue(undefined),
+  sendParentPasswordReset: jest.fn().mockResolvedValue(undefined),
+  signInForRole: jest.fn(),
   signOutUser: jest.fn(),
-  subscribeToRegistrationRequests: jest.fn(),
-  subscribeToStudents: jest.fn(),
+  subscribeToHostelCollection: jest.fn().mockReturnValue(jest.fn()),
+  subscribeToHostelRequests: jest.fn().mockReturnValue(jest.fn()),
+  subscribeToHostelStudents: jest.fn().mockReturnValue(jest.fn()),
+  subscribeToRegistrationRequests: jest.fn().mockReturnValue(jest.fn()),
+  subscribeToStudents: jest.fn().mockReturnValue(jest.fn()),
   updateStudentClass: jest.fn(),
 }));
 
@@ -34,6 +51,72 @@ jest.mock('react-native-safe-area-context', () => {
 jest.mock('react-native-image-picker', () => ({
   launchImageLibrary: jest.fn(),
 }));
+
+test('shared admin login routes a hostel admin to the hostel-only dashboard', async () => {
+  signInForRole.mockResolvedValue({
+    uid: 'hostel-admin-1',
+    email: 'hostel@example.com',
+    role: 'hostelAdmin',
+  });
+  let renderer;
+  ReactTestRenderer.act(() => {
+    renderer = ReactTestRenderer.create(<App />);
+  });
+  ReactTestRenderer.act(() => {
+    renderer.root.findByProps({ testID: 'role-admin' }).props.onPress();
+  });
+  ReactTestRenderer.act(() => {
+    renderer.root
+      .findByProps({ testID: 'email-input' })
+      .props.onChangeText('hostel@example.com');
+    renderer.root
+      .findByProps({ testID: 'password-input' })
+      .props.onChangeText('secure-password');
+  });
+  await ReactTestRenderer.act(async () => {
+    await renderer.root.findByProps({ testID: 'auth-submit' }).props.onPress();
+  });
+
+  expect(signInForRole).toHaveBeenCalledWith(
+    'hostel@example.com',
+    'secure-password',
+    'admin',
+  );
+  expect(
+    renderer.root.findByProps({ testID: 'hostel-admin-sign-out' }),
+  ).toBeTruthy();
+  expect(renderer.root.findByProps({ testID: 'hostel-tab-attendance' })).toBeTruthy();
+  expect(() => renderer.root.findByProps({ testID: 'admin-tab-students' })).toThrow();
+});
+
+test('parent login sends a reset email to the entered address', async () => {
+  let renderer;
+  ReactTestRenderer.act(() => {
+    renderer = ReactTestRenderer.create(<App />);
+  });
+  ReactTestRenderer.act(() => {
+    renderer.root.findByProps({ testID: 'role-parent' }).props.onPress();
+  });
+  ReactTestRenderer.act(() => {
+    renderer.root
+      .findByProps({ testID: 'email-input' })
+      .props.onChangeText('parent@example.com');
+  });
+  await ReactTestRenderer.act(async () => {
+    await renderer.root
+      .findByProps({ testID: 'parent-forgot-password' })
+      .props.onPress();
+  });
+
+  expect(sendParentPasswordReset).toHaveBeenCalledWith('parent@example.com');
+  expect(
+    renderer.root
+      .findAllByType(Text)
+      .some(text =>
+        text.props.children?.toString().includes('Firebase has sent a password reset link'),
+      ),
+  ).toBe(true);
+});
 
 test('student enrollment creates parent login and submits request without saving password', async () => {
   let renderer;
@@ -163,6 +246,93 @@ test('teacher board shows only students supplied from the live database', () => 
       node.props.testID?.startsWith('attendance-board-demo-'),
     ),
   ).toHaveLength(0);
+});
+
+test('teacher attendance date is visible and rejects invalid dates', () => {
+  let renderer;
+  ReactTestRenderer.act(() => {
+    renderer = ReactTestRenderer.create(
+      <TeacherDashboardScreen
+        language="en"
+        onBack={jest.fn()}
+        onPromoteStudent={jest.fn()}
+        students={[
+          {
+            id: 'STU001',
+            studentName: 'Amina Ahmed',
+            program: 'hifz-ul-quran',
+          },
+        ]}
+      />,
+    );
+  });
+
+  const dateInput = renderer.root.findByProps({ testID: 'attendance-date' });
+  expect(dateInput.props.value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+
+  ReactTestRenderer.act(() => {
+    dateInput.props.onChangeText('2024-02-31');
+  });
+  ReactTestRenderer.act(() => {
+    renderer.root
+      .findByProps({ testID: 'attendance-status-present' })
+      .props.onPress();
+  });
+
+  expect(
+    renderer.root
+      .findAllByType(Text)
+      .some(
+        text =>
+          text.props.children ===
+          'Enter a valid attendance date in YYYY-MM-DD format.',
+      ),
+  ).toBe(true);
+});
+
+test('teacher dashboard resets to an available student when the roster changes', () => {
+  const firstStudent = {
+    id: 'STU001',
+    studentName: 'Amina Ahmed',
+    program: 'hifz-ul-quran',
+  };
+  const secondStudent = {
+    id: 'STU002',
+    studentName: 'Bilal Ahmed',
+    program: 'nazra-quran',
+  };
+  let renderer;
+  ReactTestRenderer.act(() => {
+    renderer = ReactTestRenderer.create(
+      <TeacherDashboardScreen
+        language="en"
+        onBack={jest.fn()}
+        onPromoteStudent={jest.fn()}
+        students={[firstStudent, secondStudent]}
+      />,
+    );
+  });
+
+  ReactTestRenderer.act(() => {
+    renderer.root
+      .findByProps({ testID: 'teacher-student-STU002' })
+      .props.onPress();
+  });
+  ReactTestRenderer.act(() => {
+    renderer.update(
+      <TeacherDashboardScreen
+        language="en"
+        onBack={jest.fn()}
+        onPromoteStudent={jest.fn()}
+        students={[firstStudent]}
+      />,
+    );
+  });
+
+  expect(
+    renderer.root.findByProps({ testID: 'teacher-student-STU001' }).props
+      .accessibilityState.selected,
+  ).toBe(true);
 });
 
 test('teacher board shows no placeholder students when the database has no records', () => {

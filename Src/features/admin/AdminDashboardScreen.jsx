@@ -11,6 +11,7 @@ import {
 import { launchImageLibrary } from 'react-native-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import getStrings from '../../localization';
+import HostelManagementScreen from './HostelManagementScreen';
 import ParentAccessManagement from './ParentAccessManagement';
 import { classes, getProgramLabel, programs } from '../students/studentOptions';
 import styles from './styles';
@@ -22,6 +23,7 @@ const tabs = [
   { id: 'students', label: 'Students' },
   { id: 'teachers', label: 'Teachers' },
   { id: 'parents', label: 'Parents' },
+  { id: 'hostel', label: 'Hostel' },
 ];
 
 const emptyStudent = {
@@ -138,6 +140,19 @@ export default function AdminDashboardScreen({
   students,
   teachers,
   backendNotice,
+  hostelRooms,
+  hostelRegistrations,
+  hostelRequests,
+  hostelAttendance,
+  hostelMeals,
+  hostelVisitors,
+  onCreateHostelRoom,
+  onAllocateHostelRoom,
+  onReviewHostelRequest,
+  onAllocateHostelRequest,
+  onSaveHostelMeals,
+  onSaveHostelAttendance,
+  onRecordHostelVisitor,
 }) {
   const strings = getStrings(language);
   // Keep the active view and unfinished form values while switching admin tabs.
@@ -660,6 +675,28 @@ export default function AdminDashboardScreen({
     return <ParentAccessManagement language={language} students={students} />;
   }
 
+  function renderHostel() {
+    return (
+      <HostelManagementScreen
+        language={language}
+        students={students}
+        rooms={hostelRooms}
+        registrations={hostelRegistrations}
+        requests={hostelRequests}
+        attendance={hostelAttendance}
+        meals={hostelMeals}
+        visitors={hostelVisitors}
+        onCreateRoom={onCreateHostelRoom}
+        onAllocateRoom={onAllocateHostelRoom}
+        onReviewRequest={onReviewHostelRequest}
+        onAllocateRequest={onAllocateHostelRequest}
+        onSaveMeals={onSaveHostelMeals}
+        onSaveAttendance={onSaveHostelAttendance}
+        onRecordVisitor={onRecordHostelVisitor}
+      />
+    );
+  }
+
   // Resolve the current tab to its screen section.
   const tabContent = {
     overview: renderOverview,
@@ -667,6 +704,7 @@ export default function AdminDashboardScreen({
     students: renderStudents,
     teachers: renderTeachers,
     parents: renderParentAccess,
+    hostel: renderHostel,
   }[activeTab];
 
   return (
@@ -713,7 +751,11 @@ export default function AdminDashboardScreen({
               style={[styles.tab, activeTab === tab.id && styles.tabActive]}
               testID={`admin-tab-${tab.id}`}>
               <Text style={[styles.tabText, activeTab === tab.id && styles.tabTextActive]}>
-                {tab.id === 'parents' ? strings.parents : strings[tab.id]}
+                {tab.id === 'parents'
+                  ? strings.parents
+                  : tab.id === 'hostel'
+                    ? strings.hostelManagement
+                    : strings[tab.id]}
                 {tab.id === 'requests' && registrationRequests.length > 0
                   ? ` (${registrationRequests.length})`
                   : ''}

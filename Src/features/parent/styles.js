@@ -157,6 +157,28 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginTop: 5,
   },
+  hostelRequestPanel: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E0E9E3',
+    borderRadius: 12,
+    borderWidth: 1,
+    marginTop: 18,
+    padding: 14,
+  },
+  hostelRequestButton: {
+    alignItems: 'center',
+    backgroundColor: '#0B6B4B',
+    borderRadius: 9,
+    justifyContent: 'center',
+    marginTop: 12,
+    minHeight: 44,
+    paddingHorizontal: 14,
+  },
+  hostelRequestButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
   subsectionTitle: {
     color: '#0B6B4B',
     fontSize: 14,

@@ -1,6 +1,6 @@
 # Madaris Management System (MMS)
 
-React Native CLI app built with JSX and Firebase. It includes role-based login, Firestore-backed student enrollment and approvals, teacher attendance/progress reports, and parent monitoring.
+React Native CLI app built with JSX and Firebase. It includes role-based login, Firestore-backed student enrollment and approvals, teacher attendance/progress reports, parent monitoring, and admin hostel management.
 
 ## Live records
 
@@ -21,7 +21,7 @@ Src/
     quranProgress/           Hifz, Sabaq, Sabaqi, Manzil, and Nazra
     darsENizami/             Kitab-wise progress and Takrar
     school/                  Asri Taleem classes and results
-    hostel/                  Rooms, meals, and visitors
+    admin/                   Admin workflows, including hostel management
     fees/                    Student fee records
     donations/               Donors, Zakat, and Sadaqat
     salaries/                Staff salary and payments
@@ -54,6 +54,10 @@ Src/features/students/
 6. Call `getFirebaseServices()` from a feature service to access the JavaScript SDK's `auth` and `db`. It throws a clear error until the config placeholders have been replaced.
 7. Publish the rules in `firestore.rules` to the same Firebase project before using the parent portal or real student data. The mobile app cannot deploy or bypass these rules.
 8. Provision the first administrator and each teacher in Firebase Authentication. In Firestore, create `users/{uid}` with `role` set to `admin` or `teacher` and `studentIds: []`. Do this only through a trusted administrator or Firebase Console; users cannot assign themselves elevated roles.
+
+## Hostel management
+
+Administrators use the existing email-and-password admin login, then open **Admin → Hostel** to create rooms, register resident students with a room and bed, track daily breakfast/lunch/dinner records, and record visitors. Rooms include a bed count so occupancy can be tracked; room/bed allocations are checked transactionally to prevent duplicate assignments. Hostel records are stored in the `hostelRooms`, `hostelRegistrations`, `hostelMeals`, and `hostelVisitors` Firestore collections. Publish the current `firestore.rules` to enable access; these collections are restricted to authenticated admin profiles.
 
 ## Parent monitoring
 

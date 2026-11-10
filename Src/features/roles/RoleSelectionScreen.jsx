@@ -9,7 +9,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ParentRegisterScreen from './ParentRegisterScreen';
 import getStrings from '../../localization';
-import { signInForRole } from '../../services/firebase/parentMonitoring';
+import {
+  sendParentPasswordReset,
+  signInForRole,
+} from '../../services/firebase/parentMonitoring';
 import styles from './styles';
 
 export default function RoleSelectionScreen({
@@ -42,6 +45,7 @@ export default function RoleSelectionScreen({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [isSendingReset, setIsSendingReset] = useState(false);
   const activeRole = roles.find(role => role.id === selectedRole?.id);
 
   // Sign-in checks both the Firebase account and its role in the users collection.
@@ -52,9 +56,36 @@ export default function RoleSelectionScreen({
       const session = await signInForRole(email, password, activeRole.id);
       onAuthenticate(session);
     } catch (error) {
-      setMessage(error.message);
+      setMessage(
+        error.code === 'auth/email-not-verified'
+          ? strings.verificationEmailSent.replace(
+              '{email}',
+              error.email || email.trim(),
+            )
+          : error.message,
+      );
     } finally {
       setIsAuthenticating(false);
+    }
+  }
+
+  async function sendPasswordReset() {
+    setMessage('');
+    if (!email.trim()) {
+      setMessage(strings.passwordResetNeedEmail);
+      return;
+    }
+
+    setIsSendingReset(true);
+    try {
+      await sendParentPasswordReset(email);
+      setMessage(
+        strings.passwordResetSent.replace('{email}', email.trim()),
+      );
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setIsSendingReset(false);
     }
   }
 
@@ -135,7 +166,7 @@ export default function RoleSelectionScreen({
 
             <Pressable
               accessibilityRole="button"
-              disabled={isAuthenticating}
+              disabled={isAuthenticating || isSendingReset}
               onPress={authenticate}
               style={({ pressed }) => [
                 styles.submitButton,
@@ -146,6 +177,19 @@ export default function RoleSelectionScreen({
                 {strings.logIn}
               </Text>
             </Pressable>
+
+            {activeRole.id === 'parent' ? (
+              <Pressable
+                accessibilityRole="button"
+                disabled={isAuthenticating || isSendingReset}
+                onPress={sendPasswordReset}
+                style={styles.passwordResetButton}
+                testID="parent-forgot-password">
+                <Text style={styles.registerLink}>
+                  {isSendingReset ? strings.sendingPasswordReset : strings.forgotPassword}
+                </Text>
+              </Pressable>
+            ) : null}
 
             {message ? (
               <Text accessibilityRole="alert" style={styles.message}>

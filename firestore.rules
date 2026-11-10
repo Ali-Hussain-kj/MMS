@@ -19,6 +19,30 @@ service cloud.firestore {
       return hasRole('admin');
     }
 
+    function isHostelAdmin() {
+      return hasRole('hostelAdmin');
+    }
+
+    function canManageHostel() {
+      return isAdmin() || isHostelAdmin();
+    }
+
+    function parentOwnsInitialHostelRequest(studentId) {
+      let registrationPath = /databases/$(database)/documents/registrationRequests/$(studentId);
+      return existsAfter(registrationPath)
+        && getAfter(registrationPath).data.parentUid == request.auth.uid
+        && getAfter(registrationPath).data.hostelStatus == 'resident';
+    }
+
+    function hasActiveHostelDecision(studentId, requestType) {
+      let activePath = /databases/$(database)/documents/hostelActiveRequests/$(studentId);
+      return exists(activePath)
+        && get(activePath).data.requestType == requestType
+        && getAfter(
+          /databases/$(database)/documents/hostelRequests/$(get(activePath).data.requestId)
+        ).data.status == 'approved';
+    }
+
     function isTeacher() {
       return hasRole('teacher');
     }
@@ -88,6 +112,23 @@ service cloud.firestore {
           && resource.data.program == 'asri-taleem-class-1-10'
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['className'])
           && request.resource.data.className in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+        )
+        || (
+          isHostelAdmin()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hostelStatus'])
+          && request.resource.data.hostelStatus in ['day', 'resident']
+          && (
+            (
+              request.resource.data.hostelStatus == 'resident'
+              && existsAfter(/databases/$(database)/documents/hostelRegistrations/$(studentId))
+              && hasActiveHostelDecision(studentId, 'admission')
+            )
+            || (
+              request.resource.data.hostelStatus == 'day'
+              && !existsAfter(/databases/$(database)/documents/hostelRegistrations/$(studentId))
+              && hasActiveHostelDecision(studentId, 'cancellation')
+            )
+          )
         );
 
       match /{reportCollection}/{reportId} {
@@ -98,6 +139,182 @@ service cloud.firestore {
           && (isAdmin() || (isTeacher() && request.resource.data.studentId == studentId));
         allow delete: if isSupportedReport(reportCollection) && (isAdmin() || isTeacher());
       }
+    }
+
+    match /hostelRooms/{roomId} {
+      allow read, write: if canManageHostel();
+    }
+
+    match /hostelRequests/{requestId} {
+      allow create: if signedIn()
+        && request.resource.data.parentUid == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.requestType in ['admission', 'cancellation']
+        && request.resource.data.studentId is string
+        && request.resource.data.submittedAt is string
+        && request.resource.data.updatedAt is string
+        && request.resource.data.keys().hasOnly([
+          'studentId',
+          'registrationRequestId',
+          'requestType',
+          'source',
+          'studentName',
+          'fatherName',
+          'className',
+          'program',
+          'parentUid',
+          'parentEmail',
+          'contactNumber',
+          'status',
+          'submittedAt',
+          'updatedAt'
+        ])
+        && (
+          (
+            request.resource.data.requestType == 'admission'
+            && request.resource.data.source == 'registration'
+            && request.resource.data.registrationRequestId == request.resource.data.studentId
+            && parentOwnsInitialHostelRequest(request.resource.data.studentId)
+          )
+          || (
+            request.resource.data.requestType == 'admission'
+            && request.resource.data.source == 'parent'
+            && isParentOf(request.resource.data.studentId)
+            && get(
+              /databases/$(database)/documents/students/$(request.resource.data.studentId)
+            ).data.hostelStatus == 'day'
+            && !exists(
+              /databases/$(database)/documents/hostelRegistrations/$(request.resource.data.studentId)
+            )
+          )
+          || (
+            request.resource.data.requestType == 'cancellation'
+            && request.resource.data.source == 'parent'
+            && isParentOf(request.resource.data.studentId)
+            && get(
+              /databases/$(database)/documents/students/$(request.resource.data.studentId)
+            ).data.hostelStatus == 'resident'
+            && exists(
+              /databases/$(database)/documents/hostelRegistrations/$(request.resource.data.studentId)
+            )
+          )
+        );
+
+      allow read: if canManageHostel()
+        || (signedIn() && resource.data.parentUid == request.auth.uid);
+      allow update: if canManageHostel()
+        && request.resource.data.studentId == resource.data.studentId
+        && request.resource.data.parentUid == resource.data.parentUid
+        && request.resource.data.requestType == resource.data.requestType
+        && request.resource.data.status in ['pending', 'approved', 'rejected']
+        && request.resource.data.updatedAt is string
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'updatedAt',
+          'reviewedAt',
+          'processedAt',
+          'allocatedAt',
+          'roomId',
+          'roomNumber',
+          'floor',
+          'bedNumber'
+        ])
+        && (
+          (
+            resource.data.status == 'pending'
+            && request.resource.data.status in ['approved', 'rejected']
+          )
+          || (
+            resource.data.status == 'approved'
+            && request.resource.data.status == 'approved'
+            && resource.data.requestType == 'admission'
+          )
+        );
+      allow delete: if false;
+    }
+
+    match /hostelActiveRequests/{studentId} {
+      allow read: if canManageHostel()
+        || (
+          signedIn()
+          && (
+            resource.data.parentUid == request.auth.uid
+            || isParentOf(studentId)
+            || parentOwnsInitialHostelRequest(studentId)
+          )
+        );
+      allow create: if signedIn()
+        && request.resource.data.parentUid == request.auth.uid
+        && request.resource.data.requestId is string
+        && request.resource.data.requestType in ['admission', 'cancellation']
+        && request.resource.data.status == 'pending'
+        && existsAfter(
+          /databases/$(database)/documents/hostelRequests/$(request.resource.data.requestId)
+        )
+        && getAfter(
+          /databases/$(database)/documents/hostelRequests/$(request.resource.data.requestId)
+        ).data.studentId == studentId
+        && getAfter(
+          /databases/$(database)/documents/hostelRequests/$(request.resource.data.requestId)
+        ).data.requestType == request.resource.data.requestType
+        && getAfter(
+          /databases/$(database)/documents/hostelRequests/$(request.resource.data.requestId)
+        ).data.parentUid == request.auth.uid;
+      allow update: if canManageHostel()
+        && request.resource.data.parentUid == resource.data.parentUid
+        && request.resource.data.requestId == resource.data.requestId;
+      allow delete: if canManageHostel();
+    }
+
+    match /hostelRegistrations/{studentId} {
+      allow read: if canManageHostel() || isParentOf(studentId);
+      allow create: if isAdmin()
+        || (
+          isHostelAdmin()
+          && exists(/databases/$(database)/documents/hostelActiveRequests/$(studentId))
+          && get(/databases/$(database)/documents/hostelActiveRequests/$(studentId)).data.requestType == 'admission'
+          && get(/databases/$(database)/documents/hostelActiveRequests/$(studentId)).data.status == 'approved'
+          && get(
+            /databases/$(database)/documents/hostelRequests/$(get(/databases/$(database)/documents/hostelActiveRequests/$(studentId)).data.requestId)
+          ).data.status == 'approved'
+        );
+      allow update: if isAdmin();
+      allow delete: if isAdmin()
+        || (
+          isHostelAdmin()
+          && exists(/databases/$(database)/documents/hostelActiveRequests/$(studentId))
+          && get(/databases/$(database)/documents/hostelActiveRequests/$(studentId)).data.requestType == 'cancellation'
+          && getAfter(
+            /databases/$(database)/documents/hostelRequests/$(get(/databases/$(database)/documents/hostelActiveRequests/$(studentId)).data.requestId)
+          ).data.status == 'approved'
+        );
+    }
+
+    match /hostelStudentRoster/{studentId} {
+      allow read: if canManageHostel();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin()
+        || (
+          isHostelAdmin()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hostelStatus'])
+          && request.resource.data.hostelStatus in ['day', 'resident']
+          && hasActiveHostelDecision(
+            studentId,
+            request.resource.data.hostelStatus == 'resident' ? 'admission' : 'cancellation'
+          )
+        );
+    }
+
+    match /hostelAttendance/{attendanceId} {
+      allow read, write: if canManageHostel();
+    }
+
+    match /hostelMeals/{mealId} {
+      allow read, write: if canManageHostel();
+    }
+
+    match /hostelVisitors/{visitorId} {
+      allow read, write: if canManageHostel();
     }
   }
 }
