@@ -5,6 +5,17 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  leftToRight: {
+    direction: 'ltr',
+  },
+  rightToLeft: {
+    direction: 'rtl',
+  },
+  sessionLoading: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+  },
   languageToggle: {
     alignItems: 'center',
     backgroundColor: '#FFFFFF',

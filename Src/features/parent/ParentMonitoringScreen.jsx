@@ -106,6 +106,12 @@ export default function ParentMonitoringScreen({ language, user, onSignOut }) {
     }
     return requestsById;
   }, new Map());
+  const childHostelRequest = child
+    ? requestsByStudent.get(child.student.id)
+    : null;
+  const allocatedRoom =
+    child?.hostelRegistration ||
+    (childHostelRequest?.allocatedAt ? childHostelRequest : null);
   // Filter the selected child's downloaded attendance for the chosen time period.
   const attendance = useMemo(
     () =>
@@ -179,6 +185,16 @@ export default function ParentMonitoringScreen({ language, user, onSignOut }) {
               <Text style={styles.reportDetail}>
                 {strings.requestStatus}: {strings[request.status] || request.status}
               </Text>
+              {request.submittedAt ? (
+                <Text style={styles.reportDetail}>
+                  {strings.requestSubmittedAt}: {request.submittedAt}
+                </Text>
+              ) : null}
+              {request.updatedAt && request.updatedAt !== request.submittedAt ? (
+                <Text style={styles.reportDetail}>
+                  {strings.requestLastUpdated}: {request.updatedAt}
+                </Text>
+              ) : null}
               {request.allocatedAt ? (
                 <Text style={styles.reportDetail}>
                   {strings.allocatedRoomDetails}: {request.roomNumber}, {strings.floor} {request.floor}, {strings.bedNumber} {request.bedNumber}
@@ -259,20 +275,20 @@ export default function ParentMonitoringScreen({ language, user, onSignOut }) {
                   <Text style={styles.reportDetail}>
                     {strings.hostelStatus}: {child.student.hostelStatus === 'resident' ? strings.hostelResident : strings.dayStudent}
                   </Text>
-                  {requestsByStudent.get(child.student.id)?.allocatedAt ? (
-                    <Text style={styles.reportDetail}>
+                  {child.student.hostelStatus === 'resident' && allocatedRoom ? (
+                    <Text
+                      style={styles.reportDetail}
+                      testID="parent-hostel-room-details">
                       {strings.allocatedRoomDetails}:{' '}
-                      {requestsByStudent.get(child.student.id).roomNumber},{' '}
-                      {strings.floor}{' '}
-                      {requestsByStudent.get(child.student.id).floor},{' '}
-                      {strings.bedNumber}{' '}
-                      {requestsByStudent.get(child.student.id).bedNumber}
+                      {allocatedRoom.roomNumber}, {strings.floor}{' '}
+                      {allocatedRoom.floor}, {strings.bedNumber}{' '}
+                      {allocatedRoom.bedNumber}
                     </Text>
                   ) : null}
-                  {requestsByStudent.get(child.student.id)?.status === 'pending' ||
-                  (requestsByStudent.get(child.student.id)?.status === 'approved' &&
-                    requestsByStudent.get(child.student.id)?.requestType === 'admission' &&
-                    !requestsByStudent.get(child.student.id)?.allocatedAt) ? (
+                  {childHostelRequest?.status === 'pending' ||
+                  (childHostelRequest?.status === 'approved' &&
+                    childHostelRequest?.requestType === 'admission' &&
+                    !childHostelRequest?.allocatedAt) ? (
                     <Text style={styles.reportDetail}>
                       {strings.hostelRequestInProgress}
                     </Text>

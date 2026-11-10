@@ -1,16 +1,23 @@
 import {
   allocateApprovedHostelRequest,
+  allocateHostelRoom,
   approveRegistrationRequest,
   createParentAccount,
   createParentHostelRequest,
   declineRegistrationRequest,
   reviewHostelRequest,
+  removeStudent,
+  saveStudent,
   sendParentPasswordReset,
   signInForRole,
+  subscribeToAuthSession,
+  subscribeToTeacherStudents,
 } from '../Src/services/firebase/parentMonitoring';
 import { getFirebaseServices } from '../Src/services/firebase/firebase';
 import {
   createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  reload,
   sendEmailVerification,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
@@ -20,6 +27,7 @@ import {
   collection,
   doc,
   getDoc,
+  onSnapshot,
   runTransaction,
   setDoc,
 } from 'firebase/firestore';
@@ -32,6 +40,8 @@ jest.mock('firebase/auth', () => ({
   createUserWithEmailAndPassword: jest.fn(),
   sendEmailVerification: jest.fn(),
   sendPasswordResetEmail: jest.fn(),
+  onAuthStateChanged: jest.fn(),
+  reload: jest.fn(),
   signInWithEmailAndPassword: jest.fn(),
   signOut: jest.fn(),
 }));
@@ -40,6 +50,7 @@ jest.mock('firebase/firestore', () => ({
   collection: jest.fn(),
   doc: jest.fn(),
   getDoc: jest.fn(),
+  onSnapshot: jest.fn(),
   runTransaction: jest.fn(),
   setDoc: jest.fn(),
   updateDoc: jest.fn(),
@@ -91,11 +102,130 @@ test('sends a password reset email to the normalized parent email', async () => 
   );
 });
 
+test('student edits preserve the existing hostel status in both records', async () => {
+  getFirebaseServices.mockReturnValue({
+    auth: { currentUser: { uid: 'admin-1' } },
+    db: {},
+  });
+  transaction.get.mockResolvedValue({
+    exists: () => true,
+    data: () => ({ hostelStatus: 'resident' }),
+  });
+
+  await saveStudent({
+    id: 'student-1',
+    studentName: 'Amina Ahmed',
+    hostelStatus: 'day',
+  });
+
+  expect(transaction.set).toHaveBeenNthCalledWith(
+    1,
+    'parent-profile',
+    expect.objectContaining({ hostelStatus: 'resident' }),
+  );
+  expect(transaction.set).toHaveBeenNthCalledWith(
+    2,
+    'parent-profile',
+    expect.objectContaining({ hostelStatus: 'resident' }),
+  );
+});
+
+test('student deletion is blocked while a hostel registration exists', async () => {
+  getFirebaseServices.mockReturnValue({
+    auth: { currentUser: { uid: 'admin-1' } },
+    db: {},
+  });
+  transaction.get
+    .mockResolvedValueOnce({ exists: () => true })
+    .mockResolvedValueOnce({ exists: () => false });
+
+  await expect(removeStudent('student-1')).rejects.toThrow(
+    'Resolve the student’s hostel registration or pending request',
+  );
+  expect(transaction.delete).not.toHaveBeenCalled();
+});
+
 test('requires an email address before requesting a parent password reset', async () => {
   await expect(sendParentPasswordReset('  ')).rejects.toThrow(
     'Enter your parent account email address first.',
   );
   expect(sendPasswordResetEmail).not.toHaveBeenCalled();
+});
+
+test('restores a verified Firebase session using its Firestore role', async () => {
+  const user = {
+    uid: 'hostel-admin-1',
+    email: 'hostel@example.com',
+    emailVerified: true,
+    getIdToken: jest.fn().mockResolvedValue('fresh-token'),
+  };
+  let authListener;
+  onAuthStateChanged.mockImplementation((_auth, listener) => {
+    authListener = listener;
+    return jest.fn();
+  });
+
+  reload.mockResolvedValue(undefined);
+  getDoc.mockResolvedValue({
+    exists: () => true,
+    data: () => ({ role: 'hostelAdmin' }),
+  });
+
+  const restoredSession = new Promise((resolve, reject) => {
+    subscribeToAuthSession(session => {
+      if (session) {
+        resolve(session);
+      }
+    }, reject);
+    authListener(user);
+  });
+
+  await expect(restoredSession).resolves.toEqual({
+    uid: 'hostel-admin-1',
+    email: 'hostel@example.com',
+    role: 'hostelAdmin',
+  });
+  expect(reload).toHaveBeenCalledWith(user);
+  expect(user.getIdToken).toHaveBeenCalledWith(true);
+});
+
+test('teacher subscriptions listen only to student IDs assigned in the trusted profile', () => {
+  getFirebaseServices.mockReturnValue({ auth: {}, db: {} });
+  doc.mockImplementation((_db, ...segments) => segments.join('/'));
+  onSnapshot.mockImplementation((reference, onNext) => {
+    if (reference === 'users/teacher-1') {
+      onNext({
+        exists: () => true,
+        data: () => ({
+          role: 'teacher',
+          studentIds: ['student-1'],
+        }),
+      });
+    } else {
+      onNext({
+        exists: () => true,
+        id: 'student-1',
+        data: () => ({ studentName: 'Amina Ahmed' }),
+      });
+    }
+    return jest.fn();
+  });
+  const onChange = jest.fn();
+
+  const unsubscribe = subscribeToTeacherStudents(
+    'teacher-1',
+    onChange,
+    jest.fn(),
+  );
+
+  expect(onSnapshot.mock.calls.map(([reference]) => reference)).toEqual([
+    'users/teacher-1',
+    'students/student-1',
+  ]);
+  expect(onChange).toHaveBeenLastCalledWith([
+    { id: 'student-1', studentName: 'Amina Ahmed' },
+  ]);
+  unsubscribe();
 });
 
 test('creates the parent login and saves the student request without its password', async () => {
@@ -265,8 +395,14 @@ test('approved hostel request allocates one available bed and activates the stud
         data: () => ({ requestId: 'request-1' }),
       },
       'hostelRegistrations/STU001': { exists: () => false },
-      'students/STU001': { exists: () => true },
-      'hostelStudentRoster/STU001': { exists: () => true },
+      'students/STU001': {
+        exists: () => true,
+        data: () => ({ hostelStatus: 'day' }),
+      },
+      'hostelStudentRoster/STU001': {
+        exists: () => true,
+        data: () => ({ hostelStatus: 'day' }),
+      },
       'hostelRooms/room-1': {
         exists: () => true,
         data: () => ({
@@ -300,6 +436,170 @@ test('approved hostel request allocates one available bed and activates the stud
   expect(transaction.delete).toHaveBeenCalledWith(
     'hostelActiveRequests/STU001',
   );
+});
+
+test('cancellation approval releases only the bed assigned to that student', async () => {
+  doc.mockImplementation((_db, collectionName, id) => `${collectionName}/${id}`);
+  transaction.get.mockImplementation(ref => {
+    const records = {
+      'hostelRequests/cancel-1': {
+        exists: () => true,
+        data: () => ({
+          studentId: 'STU001',
+          requestType: 'cancellation',
+          status: 'pending',
+        }),
+      },
+      'hostelActiveRequests/STU001': {
+        exists: () => true,
+        data: () => ({ requestId: 'cancel-1' }),
+      },
+      'hostelRegistrations/STU001': {
+        exists: () => true,
+        data: () => ({ roomId: 'room-1', bedNumber: 2 }),
+      },
+      'students/STU001': {
+        exists: () => true,
+        data: () => ({ hostelStatus: 'resident' }),
+      },
+      'hostelRooms/room-1': {
+        exists: () => true,
+        data: () => ({
+          allocations: { 1: 'STU002', 2: 'STU001' },
+        }),
+      },
+    };
+    return Promise.resolve(records[ref]);
+  });
+
+  await reviewHostelRequest('cancel-1', 'approve');
+
+  expect(transaction.update).toHaveBeenCalledWith(
+    'hostelRooms/room-1',
+    { allocations: { 1: 'STU002' } },
+  );
+  expect(transaction.update).toHaveBeenCalledWith(
+    'students/STU001',
+    { hostelStatus: 'day' },
+  );
+  expect(transaction.delete).toHaveBeenCalledWith(
+    'hostelRegistrations/STU001',
+  );
+});
+
+test('cancellation approval fails rather than releasing another student’s bed', async () => {
+  doc.mockImplementation((_db, collectionName, id) => `${collectionName}/${id}`);
+  transaction.get.mockImplementation(ref => {
+    const records = {
+      'hostelRequests/cancel-1': {
+        exists: () => true,
+        data: () => ({
+          studentId: 'STU001',
+          requestType: 'cancellation',
+          status: 'pending',
+        }),
+      },
+      'hostelActiveRequests/STU001': {
+        exists: () => true,
+        data: () => ({ requestId: 'cancel-1' }),
+      },
+      'hostelRegistrations/STU001': {
+        exists: () => true,
+        data: () => ({ roomId: 'room-1', bedNumber: 2 }),
+      },
+      'students/STU001': {
+        exists: () => true,
+        data: () => ({ hostelStatus: 'resident' }),
+      },
+      'hostelRooms/room-1': {
+        exists: () => true,
+        data: () => ({ allocations: { 2: 'STU002' } }),
+      },
+    };
+    return Promise.resolve(records[ref]);
+  });
+
+  await expect(reviewHostelRequest('cancel-1', 'approve')).rejects.toThrow(
+    'not allocated to this student',
+  );
+  expect(transaction.update).not.toHaveBeenCalled();
+  expect(transaction.delete).not.toHaveBeenCalled();
+});
+
+test('manual room allocation requires a resident with no active hostel request', async () => {
+  doc.mockImplementation((_db, collectionName, id) => `${collectionName}/${id}`);
+  transaction.get.mockImplementation(ref => {
+    const records = {
+      'hostelRegistrations/STU001': { exists: () => false },
+      'hostelRooms/room-1': {
+        exists: () => true,
+        data: () => ({
+          roomNumber: '12',
+          floor: 'First',
+          bedCount: 2,
+          allocations: {},
+        }),
+      },
+      'students/STU001': {
+        exists: () => true,
+        data: () => ({ hostelStatus: 'resident' }),
+      },
+      'hostelStudentRoster/STU001': {
+        exists: () => true,
+        data: () => ({ hostelStatus: 'resident' }),
+      },
+      'hostelActiveRequests/STU001': { exists: () => false },
+    };
+    return Promise.resolve(records[ref]);
+  });
+
+  await allocateHostelRoom({
+    studentId: 'STU001',
+    studentName: 'Amina Ahmed',
+    roomId: 'room-1',
+    bedNumber: 2,
+    admissionDate: '2026-11-11',
+  });
+
+  expect(transaction.update).toHaveBeenCalledWith(
+    'hostelRooms/room-1',
+    { allocations: { 2: 'STU001' } },
+  );
+  expect(transaction.set).toHaveBeenCalledWith(
+    'hostelRegistrations/STU001',
+    expect.objectContaining({ bedNumber: 2 }),
+  );
+});
+
+test('manual room allocation rejects day students before writing', async () => {
+  doc.mockImplementation((_db, collectionName, id) => `${collectionName}/${id}`);
+  transaction.get.mockImplementation(ref => {
+    const records = {
+      'hostelRegistrations/STU001': { exists: () => false },
+      'hostelRooms/room-1': { exists: () => true },
+      'students/STU001': {
+        exists: () => true,
+        data: () => ({ hostelStatus: 'day' }),
+      },
+      'hostelStudentRoster/STU001': {
+        exists: () => true,
+        data: () => ({ hostelStatus: 'day' }),
+      },
+      'hostelActiveRequests/STU001': { exists: () => false },
+    };
+    return Promise.resolve(records[ref]);
+  });
+
+  await expect(
+    allocateHostelRoom({
+      studentId: 'STU001',
+      roomId: 'room-1',
+      bedNumber: 1,
+      admissionDate: '2026-11-11',
+    }),
+  ).rejects.toThrow('Only an approved hostel resident');
+  expect(transaction.set).not.toHaveBeenCalled();
+  expect(transaction.update).not.toHaveBeenCalled();
 });
 
 test('declining a new student also closes its pending hostel request', async () => {

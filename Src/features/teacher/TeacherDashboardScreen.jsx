@@ -9,7 +9,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import getStrings from '../../localization';
-import { saveTeacherReport } from '../../services/firebase/parentMonitoring';
+import {
+  saveSchoolSubjects,
+  saveTeacherReport,
+  subscribeToSchoolSubjects,
+  subscribeToTeacherReports,
+} from '../../services/firebase/parentMonitoring';
 import { getProgramLabel } from '../students/studentOptions';
 import styles from './styles';
 
@@ -298,11 +303,7 @@ export default function TeacherDashboardScreen({
   const [takrarRecords, setTakrarRecords] = useState([]);
   const [schoolClass, setSchoolClass] = useState('1');
   const [schoolSubject, setSchoolSubject] = useState('');
-  const [schoolSubjects, setSchoolSubjects] = useState([
-    'English',
-    'Mathematics',
-    'Islamiat',
-  ]);
+  const [schoolSubjects, setSchoolSubjects] = useState([]);
   const [marksForm, setMarksForm] = useState({
     subject: 'English',
     marks: '',
@@ -314,6 +315,39 @@ export default function TeacherDashboardScreen({
 
   const activeStudent =
     students.find(student => student.id === selectedStudentId) || students[0];
+  const activeStudentId = activeStudent?.id;
+
+  useEffect(() => {
+    if (!isAuthenticated || !activeStudentId) {
+      return undefined;
+    }
+
+    return subscribeToTeacherReports(
+      activeStudentId,
+      reports => {
+        setAttendance(reports.attendance);
+        setQuranRecords(reports.hifzProgress);
+        setNazraRecords(reports.nazraProgress);
+        setBookProgress(reports.darsProgress);
+        setTakrarRecords(reports.takrarAttendance);
+        setMarksRecords(reports.schoolResults);
+      },
+      error => setNotice(`Could not load student reports: ${error.message}`),
+    );
+  }, [activeStudentId, isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      return undefined;
+    }
+
+    setSchoolSubjects([]);
+    return subscribeToSchoolSubjects(
+      schoolClass,
+      setSchoolSubjects,
+      error => setNotice(`Could not load class subjects: ${error.message}`),
+    );
+  }, [isAuthenticated, schoolClass]);
   useEffect(() => {
     const currentStudent =
       students.find(student => student.id === selectedStudentId) || students[0];
@@ -386,7 +420,17 @@ export default function TeacherDashboardScreen({
     setNotice('');
   }
 
-  function markAttendanceFor(student, status) {
+  async function persistTeacherReport(studentId, collectionName, record) {
+    try {
+      await saveTeacherReport(studentId, collectionName, record);
+      return true;
+    } catch (error) {
+      setNotice(`Could not save ${collectionName} report: ${error.message}`);
+      return false;
+    }
+  }
+
+  async function markAttendanceFor(student, status) {
     if (!student) {
       setNotice('Add or approve a student before marking attendance.');
       return;
@@ -403,15 +447,13 @@ export default function TeacherDashboardScreen({
       date: attendanceDate,
       status,
     };
+    if (!(await persistTeacherReport(student.id, 'attendance', record))) {
+      return;
+    }
     setAttendance(current => {
       const withoutDay = current.filter(item => item.id !== record.id);
       return [...withoutDay, record].sort((a, b) => b.date.localeCompare(a.date));
     });
-    if (isAuthenticated) {
-      saveTeacherReport(student.id, 'attendance', record).catch(error =>
-        setNotice(`Could not save attendance report: ${error.message}`),
-      );
-    }
     setSelectedStudentId(student.id);
     setNotice(`${student.studentName} marked ${strings[attendanceStringKeys[status]]} for ${attendanceDate}.`);
   }
@@ -434,7 +476,7 @@ export default function TeacherDashboardScreen({
     );
   }
 
-  function saveQuranRecord(type) {
+  async function saveQuranRecord(type) {
     // Each Hifz record type has different required fields and date inputs.
     const required = {
       sabaq: [
@@ -485,16 +527,14 @@ export default function TeacherDashboardScreen({
       mistakes: quranForm.mistakes,
       grade: mistakeGrade(quranForm.mistakes),
     };
-    setQuranRecords(current => [...current, record]);
-    if (isAuthenticated) {
-      saveTeacherReport(activeStudent.id, 'hifzProgress', record).catch(error =>
-        setNotice(`Could not save Hifz report: ${error.message}`),
-      );
+    if (!(await persistTeacherReport(activeStudent.id, 'hifzProgress', record))) {
+      return;
     }
+    setQuranRecords(current => [...current, record]);
     setNotice(`${type[0].toUpperCase()}${type.slice(1)} saved for ${activeStudent.studentName}.`);
   }
 
-  function saveNazra() {
+  async function saveNazra() {
     if (!nazraForm.page.trim() || !nazraForm.completion.trim()) {
       setNotice('Enter the page number and completion percentage.');
       return;
@@ -512,49 +552,61 @@ export default function TeacherDashboardScreen({
       studentName: activeStudent.studentName,
       completion,
     };
-    setNazraRecords(current => [
-      ...current,
-      record,
-    ]);
-    if (isAuthenticated) {
-      saveTeacherReport(activeStudent.id, 'nazraProgress', record).catch(error =>
-        setNotice(`Could not save Nazra report: ${error.message}`),
-      );
+    if (!(await persistTeacherReport(activeStudent.id, 'nazraProgress', record))) {
+      return;
     }
+    setNazraRecords(current => [...current, record]);
     setNotice('Nazra reading log saved.');
   }
 
-  function saveBookProgress() {
-    if (!bookForm.book.trim() || !bookForm.percentage.trim()) {
-      setNotice('Enter the kitab name and completion percentage.');
+  async function saveBookProgress() {
+    if (
+      !bookForm.book.trim() ||
+      !bookForm.chapters.trim() ||
+      !bookForm.pages.trim() ||
+      !bookForm.percentage.trim()
+    ) {
+      setNotice('Enter the kitab name, chapters, pages, and completion percentage.');
       return;
     }
+    const chapters = Number(bookForm.chapters);
+    const pages = Number(bookForm.pages);
     const percentage = Number(bookForm.percentage);
+    if (
+      !Number.isInteger(chapters) ||
+      chapters < 0 ||
+      !Number.isInteger(pages) ||
+      pages < 0
+    ) {
+      setNotice('Chapters and pages must be whole numbers greater than or equal to zero.');
+      return;
+    }
     if (!Number.isFinite(percentage) || percentage < 0 || percentage > 100) {
       setNotice('Completion percentage must be from 0 to 100.');
       return;
     }
-    setBookProgress(current => {
-      const existing = current.find(
-        entry =>
-          entry.studentId === activeStudent.id &&
-          entry.book.toLowerCase() === bookForm.book.trim().toLowerCase(),
-      );
-      const entry = {
-        ...bookForm,
-        book: bookForm.book.trim(),
-        percentage,
-        studentId: activeStudent.id,
-        studentName: activeStudent.studentName,
-      };
-      return existing
-        ? current.map(item => (item === existing ? entry : item))
-        : [...current, entry];
-    });
+    const book = bookForm.book.trim();
+    const record = {
+      ...bookForm,
+      id: `book-${encodeURIComponent(book.toLowerCase())}`,
+      book,
+      chapters,
+      pages,
+      percentage,
+      studentId: activeStudent.id,
+      studentName: activeStudent.studentName,
+    };
+    if (!(await persistTeacherReport(activeStudent.id, 'darsProgress', record))) {
+      return;
+    }
+    setBookProgress(current => [
+      ...current.filter(item => item.id !== record.id),
+      record,
+    ]);
     setNotice('Kitab progress updated.');
   }
 
-  function saveTakrar() {
+  async function saveTakrar() {
     const missing = ['date', 'time', 'subject', 'supervisor'].find(
       field => !takrarForm[field].trim(),
     );
@@ -562,19 +614,24 @@ export default function TeacherDashboardScreen({
       setNotice(`Enter the Takrar ${missing} before saving.`);
       return;
     }
-    setTakrarRecords(current => [
-      ...current,
-      {
-        ...takrarForm,
-        id: `takrar-${Date.now()}`,
-        studentId: activeStudent.id,
-        studentName: activeStudent.studentName,
-      },
-    ]);
+    if (!isValidDate(takrarForm.date)) {
+      setNotice('Enter a valid Takrar date in YYYY-MM-DD format.');
+      return;
+    }
+    const record = {
+      ...takrarForm,
+      id: `takrar-${Date.now()}`,
+      studentId: activeStudent.id,
+      studentName: activeStudent.studentName,
+    };
+    if (!(await persistTeacherReport(activeStudent.id, 'takrarAttendance', record))) {
+      return;
+    }
+    setTakrarRecords(current => [...current, record]);
     setNotice('Takrar attendance saved separately from daily attendance.');
   }
 
-  function addSchoolSubject() {
+  async function addSchoolSubject() {
     const subject = schoolSubject.trim();
     if (!subject) {
       setNotice('Enter a subject name first.');
@@ -584,13 +641,20 @@ export default function TeacherDashboardScreen({
       setNotice('That subject is already in the subject list.');
       return;
     }
-    setSchoolSubjects(current => [...current, subject]);
+    const updatedSubjects = [...schoolSubjects, subject];
+    try {
+      await saveSchoolSubjects(schoolClass, updatedSubjects);
+      setSchoolSubjects(updatedSubjects);
+    } catch (error) {
+      setNotice(`Could not save class subjects: ${error.message}`);
+      return;
+    }
     setMarksForm(current => ({ ...current, subject }));
     setSchoolSubject('');
     setNotice(`${subject} added to the subject list.`);
   }
 
-  function saveMarks() {
+  async function saveMarks() {
     const marks = Number(marksForm.marks);
     const total = Number(marksForm.total);
     if (!marksForm.subject || !marksForm.marks.trim() || !marksForm.total.trim()) {
@@ -602,7 +666,7 @@ export default function TeacherDashboardScreen({
       return;
     }
     const record = {
-      id: `marks-${Date.now()}`,
+      id: `marks-${schoolClass}-${encodeURIComponent(marksForm.subject.toLowerCase())}`,
       studentId: activeStudent.id,
       studentName: activeStudent.studentName,
       className: schoolClass,
@@ -611,14 +675,12 @@ export default function TeacherDashboardScreen({
       total,
       percentage: Math.round((marks / total) * 100),
     };
+    if (!(await persistTeacherReport(activeStudent.id, 'schoolResults', record))) {
+      return;
+    }
     setMarksRecords(current => [
       ...current.filter(
-        item =>
-          !(
-            item.studentId === record.studentId &&
-            item.className === record.className &&
-            item.subject === record.subject
-          ),
+        item => item.id !== record.id,
       ),
       record,
     ]);
@@ -639,7 +701,7 @@ export default function TeacherDashboardScreen({
     );
   }
 
-  function promoteStudent() {
+  async function promoteStudent() {
     const currentClass = Number(activeStudent?.className);
     if (
       !activeStudent ||
@@ -651,9 +713,13 @@ export default function TeacherDashboardScreen({
       setNotice('Promotion is available for Asri Taleem students in Classes 1–9.');
       return;
     }
-    onPromoteStudent(activeStudent.id, String(currentClass + 1));
-    setSchoolClass(String(currentClass + 1));
-    setNotice(`${activeStudent.studentName} promoted to Class ${currentClass + 1}.`);
+    try {
+      await onPromoteStudent(activeStudent.id, String(currentClass + 1));
+      setSchoolClass(String(currentClass + 1));
+      setNotice(`${activeStudent.studentName} promoted to Class ${currentClass + 1}.`);
+    } catch (error) {
+      setNotice(`Could not promote student: ${error.message}`);
+    }
   }
 
   function renderAttendance() {
@@ -826,8 +892,8 @@ export default function TeacherDashboardScreen({
           subtitle="Track chapters, pages, and completion separately for each book."
         />
         <Field label="Kitab name" value={bookForm.book} onChangeText={value => setBookForm(current => ({ ...current, book: value }))} testID="kitab-name" />
-        <Field label="Chapters completed" value={bookForm.chapters} keyboardType="numeric" onChangeText={value => setBookForm(current => ({ ...current, chapters: value }))} />
-        <Field label="Pages covered" value={bookForm.pages} keyboardType="numeric" onChangeText={value => setBookForm(current => ({ ...current, pages: value }))} />
+        <Field label="Chapters completed" value={bookForm.chapters} keyboardType="numeric" onChangeText={value => setBookForm(current => ({ ...current, chapters: value }))} testID="kitab-chapters" />
+        <Field label="Pages covered" value={bookForm.pages} keyboardType="numeric" onChangeText={value => setBookForm(current => ({ ...current, pages: value }))} testID="kitab-pages" />
         <Field label="Completion percentage" value={bookForm.percentage} keyboardType="numeric" placeholder="0–100" onChangeText={value => setBookForm(current => ({ ...current, percentage: value }))} testID="kitab-percentage" />
         <Button label="Update kitab progress" onPress={saveBookProgress} testID="save-kitab-progress" />
         <SectionTitle title="Book-wise progress" />

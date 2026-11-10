@@ -3,6 +3,63 @@ function getFirebaseServices() {
   return require('./firebase').getFirebaseServices();
 }
 
+export function subscribeToAuthSession(onSession, onError) {
+  const { auth, db } = getFirebaseServices();
+  const { onAuthStateChanged, reload, signOut } = require('firebase/auth');
+  const { doc, getDoc } = require('firebase/firestore');
+  let generation = 0;
+
+  return onAuthStateChanged(auth, user => {
+    const currentGeneration = ++generation;
+    if (!user) {
+      onSession(null);
+      return;
+    }
+
+    async function restoreSession() {
+      try {
+        await reload(user);
+        if (!user.emailVerified) {
+          const error = new Error(
+            'Email verification is required before restoring this session.',
+          );
+          error.code = 'auth/email-not-verified';
+          throw error;
+        }
+
+        await user.getIdToken(true);
+        const profile = await getDoc(doc(db, 'users', user.uid));
+        if (!profile.exists()) {
+          throw new Error('The authenticated account profile was not found.');
+        }
+
+        const role = profile.data().role;
+        if (!['admin', 'hostelAdmin', 'teacher', 'parent'].includes(role)) {
+          throw new Error('The authenticated account has an unsupported role.');
+        }
+        if (generation === currentGeneration) {
+          onSession({ uid: user.uid, email: user.email, role });
+        }
+      } catch (error) {
+        if (generation !== currentGeneration) {
+          return;
+        }
+
+        onError(error);
+        if (auth.currentUser?.uid === user.uid) {
+          try {
+            await signOut(auth);
+          } catch (signOutError) {
+            onError(signOutError);
+          }
+        }
+      }
+    }
+
+    restoreSession();
+  });
+}
+
 function isValidISODate(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) {
     return false;
@@ -338,6 +395,7 @@ export function subscribeToParentReports(uid, onChange, onError) {
 
         const studentReport = {
           student: null,
+          hostelRegistration: null,
           attendance: [],
           hifzProgress: [],
           nazraProgress: [],
@@ -353,6 +411,16 @@ export function subscribeToParentReports(uid, onChange, onError) {
                 ? { id: studentSnapshot.id, ...studentSnapshot.data() }
                 : null;
               publish();
+            },
+            onError,
+          ),
+          onSnapshot(
+            doc(db, 'hostelRegistrations', studentId),
+            registrationSnapshot => {
+            studentReport.hostelRegistration = registrationSnapshot.exists()
+              ? { id: registrationSnapshot.id, ...registrationSnapshot.data() }
+              : null;
+            publish();
             },
             onError,
           ),
@@ -438,6 +506,114 @@ export function subscribeToStudents(
   );
 }
 
+export function subscribeToTeacherStudents(uid, onChange, onError) {
+  if (!uid) {
+    throw new Error('A signed-in teacher ID is required.');
+  }
+  const { db } = getFirebaseServices();
+  const { doc, onSnapshot } = require('firebase/firestore');
+  const subscriptions = new Map();
+  const studentsById = new Map();
+  let assignedStudentIds = [];
+
+  function publish() {
+    onChange(
+      assignedStudentIds
+        .map(studentId => studentsById.get(studentId))
+        .filter(Boolean),
+    );
+  }
+
+  function clearStudentSubscriptions() {
+    subscriptions.forEach(unsubscribe => unsubscribe());
+    subscriptions.clear();
+    studentsById.clear();
+    assignedStudentIds = [];
+    publish();
+  }
+
+  const unsubscribeProfile = onSnapshot(
+    doc(db, 'users', uid),
+    profileSnapshot => {
+      if (!profileSnapshot.exists() || profileSnapshot.data().role !== 'teacher') {
+        clearStudentSubscriptions();
+        onError(new Error('The teacher profile or role assignment is unavailable.'));
+        return;
+      }
+
+      const profile = profileSnapshot.data();
+      const studentIds = Array.isArray(profile.studentIds)
+        ? [...new Set(profile.studentIds.filter(id => typeof id === 'string' && id))]
+        : [];
+      const assignedIds = new Set(studentIds);
+
+      subscriptions.forEach((unsubscribe, studentId) => {
+        if (!assignedIds.has(studentId)) {
+          unsubscribe();
+          subscriptions.delete(studentId);
+          studentsById.delete(studentId);
+        }
+      });
+      assignedStudentIds = studentIds;
+
+      studentIds.forEach(studentId => {
+        if (subscriptions.has(studentId)) {
+          return;
+        }
+        const unsubscribe = onSnapshot(
+          doc(db, 'students', studentId),
+          studentSnapshot => {
+            if (studentSnapshot.exists()) {
+              studentsById.set(studentId, {
+                id: studentSnapshot.id,
+                ...studentSnapshot.data(),
+              });
+            } else {
+              studentsById.delete(studentId);
+            }
+            publish();
+          },
+          onError,
+        );
+        subscriptions.set(studentId, unsubscribe);
+      });
+      publish();
+    },
+    onError,
+  );
+
+  return () => {
+    unsubscribeProfile();
+    clearStudentSubscriptions();
+  };
+}
+
+export function subscribeToTeachers(onChange, onError) {
+  const { db } = getFirebaseServices();
+  const { collection, onSnapshot } = require('firebase/firestore');
+  return onSnapshot(
+    collection(db, 'teachers'),
+    snapshot =>
+      onChange(
+        snapshot.docs.map(teacher => ({ id: teacher.id, ...teacher.data() })),
+      ),
+    onError,
+  );
+}
+
+export function subscribeToFinancialRecords(onChange, onError) {
+  const { db } = getFirebaseServices();
+  const { collection, onSnapshot } = require('firebase/firestore');
+  return onSnapshot(
+    collection(db, 'financialRecords'),
+    snapshot =>
+      onChange(
+        snapshot.docs.map(record => ({ id: record.id, ...record.data() })),
+      ),
+    onError,
+  );
+}
+
 export function subscribeToHostelStudents(onChange, onError) {
   const { db } = getFirebaseServices();
   const { collection, onSnapshot } = require('firebase/firestore');
@@ -452,28 +628,121 @@ export function subscribeToHostelStudents(onChange, onError) {
 }
 
 export async function saveStudent(student) {
-  const { db } = getFirebaseServices();
-  const { doc, setDoc } = require('firebase/firestore');
-  await setDoc(doc(db, 'students', student.id), student);
-  const hostelRosterRef = doc(db, 'hostelStudentRoster', student.id);
-  await setDoc(hostelRosterRef, {
-    id: student.id,
-    studentName: student.studentName,
-    fatherName: student.fatherName || '',
-    className: student.className || '',
-    program: student.program || '',
-    contactNumber: student.contactNumber || '',
-    hostelStatus: student.hostelStatus === 'resident' ? 'resident' : 'day',
+  const { auth, db } = getFirebaseServices();
+  if (!auth.currentUser || !student?.id) {
+    throw new Error('An authenticated administrator and student ID are required.');
+  }
+
+  const { doc, runTransaction } = require('firebase/firestore');
+  const studentRef = doc(db, 'students', student.id);
+  const rosterRef = doc(db, 'hostelStudentRoster', student.id);
+  const registrationRef = doc(db, 'hostelRegistrations', student.id);
+  await runTransaction(db, async transaction => {
+    const [existingStudent, registration] = await Promise.all([
+      transaction.get(studentRef),
+      transaction.get(registrationRef),
+    ]);
+    const hostelStatus =
+      registration.exists() ||
+      (existingStudent.exists() &&
+        existingStudent.data().hostelStatus === 'resident')
+        ? 'resident'
+        : 'day';
+    const savedStudent = { ...student, hostelStatus };
+    transaction.set(studentRef, savedStudent);
+    transaction.set(rosterRef, {
+      id: student.id,
+      studentName: student.studentName,
+      fatherName: student.fatherName || '',
+      className: student.className || '',
+      program: student.program || '',
+      contactNumber: student.contactNumber || '',
+      hostelStatus,
+    });
   });
 }
 
-export async function removeStudent(studentId) {
-  const { db } = getFirebaseServices();
+export async function saveTeacherProfile(teacher) {
+  const { auth, db } = getFirebaseServices();
+  if (!auth.currentUser || !teacher?.id || teacher.id.includes('/')) {
+    throw new Error('An authenticated administrator and teacher ID are required.');
+  }
+
+  const { doc, setDoc } = require('firebase/firestore');
+  await setDoc(doc(db, 'teachers', teacher.id), teacher);
+}
+
+export async function removeTeacherProfile(teacherId) {
+  const { auth, db } = getFirebaseServices();
+  if (!auth.currentUser || !teacherId) {
+    throw new Error('An authenticated administrator and teacher ID are required.');
+  }
+
   const { deleteDoc, doc } = require('firebase/firestore');
-  await Promise.all([
-    deleteDoc(doc(db, 'students', studentId)),
-    deleteDoc(doc(db, 'hostelStudentRoster', studentId)),
-  ]);
+  await deleteDoc(doc(db, 'teachers', teacherId));
+}
+
+export async function saveFinancialRecord(record) {
+  const { auth, db } = getFirebaseServices();
+  if (!auth.currentUser || !record?.id) {
+    throw new Error('An authenticated administrator and record ID are required.');
+  }
+  if (
+    typeof record.id !== 'string' ||
+    record.id.includes('/') ||
+    !['fee', 'zakat', 'sadaqat', 'donation', 'salary'].includes(record.type) ||
+    !Number.isFinite(record.amount) ||
+    record.amount <= 0 ||
+    !isValidISODate(record.date) ||
+    typeof record.entityId !== 'string' ||
+    typeof record.entityName !== 'string' ||
+    !record.category?.trim() ||
+    typeof record.period !== 'string' ||
+    typeof record.notes !== 'string' ||
+    typeof record.createdAt !== 'string' ||
+    typeof record.updatedAt !== 'string'
+  ) {
+    throw new Error('A valid financial record is required.');
+  }
+
+  const { doc, setDoc } = require('firebase/firestore');
+  await setDoc(doc(db, 'financialRecords', record.id), record);
+}
+
+export async function removeFinancialRecord(recordId) {
+  const { auth, db } = getFirebaseServices();
+  if (!auth.currentUser || !recordId) {
+    throw new Error('An authenticated administrator and record ID are required.');
+  }
+
+  const { deleteDoc, doc } = require('firebase/firestore');
+  await deleteDoc(doc(db, 'financialRecords', recordId));
+}
+
+export async function removeStudent(studentId) {
+  const { auth, db } = getFirebaseServices();
+  if (!auth.currentUser || !studentId) {
+    throw new Error('An authenticated administrator and student ID are required.');
+  }
+  const { doc, runTransaction } = require('firebase/firestore');
+  const studentRef = doc(db, 'students', studentId);
+  const rosterRef = doc(db, 'hostelStudentRoster', studentId);
+  const registrationRef = doc(db, 'hostelRegistrations', studentId);
+  const activeRequestRef = doc(db, 'hostelActiveRequests', studentId);
+  await runTransaction(db, async transaction => {
+    const [registration, activeRequest] = await Promise.all([
+      transaction.get(registrationRef),
+      transaction.get(activeRequestRef),
+    ]);
+    if (registration.exists() || activeRequest.exists()) {
+      throw new Error(
+        'Resolve the student’s hostel registration or pending request before deleting the student.',
+      );
+    }
+
+    transaction.delete(studentRef);
+    transaction.delete(rosterRef);
+  });
 }
 
 export async function updateStudentClass(studentId, className) {
@@ -509,7 +778,18 @@ export async function linkStudentsToParent(parentUid, studentIds) {
 export async function saveTeacherReport(studentId, collectionName, record) {
   const { auth, db } = getFirebaseServices();
   if (!auth.currentUser) {
-    return;
+    throw new Error('Sign in before saving a student report.');
+  }
+  if (
+    !studentId ||
+    !['attendance', 'hifzProgress', 'nazraProgress', 'darsProgress', 'takrarAttendance', 'schoolResults'].includes(collectionName) ||
+    !record ||
+    typeof record.id !== 'string' ||
+    !record.id ||
+    record.id.includes('/') ||
+    record.studentId !== studentId
+  ) {
+    throw new Error('A valid student report is required.');
   }
 
   // Keep each report inside its student's document path for rule-based access checks.
@@ -517,6 +797,72 @@ export async function saveTeacherReport(studentId, collectionName, record) {
   await setDoc(
     doc(db, 'students', studentId, collectionName, record.id),
     record,
+  );
+}
+
+export function subscribeToTeacherReports(studentId, onChange, onError) {
+  const { db } = getFirebaseServices();
+  const { collection, onSnapshot } = require('firebase/firestore');
+  const reportCollections = [
+    'attendance',
+    'hifzProgress',
+    'nazraProgress',
+    'darsProgress',
+    'takrarAttendance',
+    'schoolResults',
+  ];
+  const reports = Object.fromEntries(
+    reportCollections.map(collectionName => [collectionName, []]),
+  );
+  const unsubscribes = reportCollections.map(collectionName =>
+    onSnapshot(
+      collection(db, 'students', studentId, collectionName),
+      snapshot => {
+        reports[collectionName] = snapshot.docs
+          .map(record => ({ id: record.id, ...record.data() }))
+          .sort((left, right) =>
+            (left.date || '').localeCompare(right.date || ''),
+          );
+        onChange({ ...reports });
+      },
+      onError,
+    ),
+  );
+
+  return () => unsubscribes.forEach(unsubscribe => unsubscribe());
+}
+
+export async function saveSchoolSubjects(className, subjects) {
+  const { auth, db } = getFirebaseServices();
+  if (!auth.currentUser) {
+    throw new Error('Sign in before saving class subjects.');
+  }
+  if (
+    !['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'].includes(className) ||
+    !Array.isArray(subjects) ||
+    subjects.some(subject => typeof subject !== 'string' || !subject.trim())
+  ) {
+    throw new Error('A valid class and subject list are required.');
+  }
+
+  const { doc, setDoc } = require('firebase/firestore');
+  await setDoc(doc(db, 'schoolSubjects', className), {
+    className,
+    subjects,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+export function subscribeToSchoolSubjects(className, onChange, onError) {
+  const { db } = getFirebaseServices();
+  const { doc, onSnapshot } = require('firebase/firestore');
+  return onSnapshot(
+    doc(db, 'schoolSubjects', className),
+    snapshot => {
+      const subjects = snapshot.exists() ? snapshot.data().subjects : [];
+      onChange(Array.isArray(subjects) ? subjects : []);
+    },
+    onError,
   );
 }
 
@@ -682,13 +1028,22 @@ export async function reviewHostelRequest(requestId, decision) {
       if (!registration.exists() || !student.exists()) {
         throw new Error('The student no longer has an active hostel registration.');
       }
-      const roomRef = doc(db, 'hostelRooms', registration.data().roomId);
-      const room = await transaction.get(roomRef);
-      if (room.exists()) {
-        const allocations = { ...(room.data().allocations || {}) };
-        delete allocations[registration.data().bedNumber];
-        transaction.update(roomRef, { allocations });
+      if (student.data().hostelStatus !== 'resident') {
+        throw new Error('The student is not currently marked as a hostel resident.');
       }
+
+      const currentRegistration = registration.data();
+      const roomRef = doc(db, 'hostelRooms', currentRegistration.roomId);
+      const room = await transaction.get(roomRef);
+      if (!room.exists()) {
+        throw new Error('The allocated hostel room is unavailable; the bed was not released.');
+      }
+      const allocations = { ...(room.data().allocations || {}) };
+      if (allocations[currentRegistration.bedNumber] !== request.studentId) {
+        throw new Error('The registered bed is not allocated to this student.');
+      }
+      delete allocations[currentRegistration.bedNumber];
+      transaction.update(roomRef, { allocations });
       transaction.update(studentRef, { hostelStatus: 'day' });
       transaction.update(rosterRef, { hostelStatus: 'day' });
       transaction.delete(registrationRef);
@@ -751,6 +1106,12 @@ export async function allocateApprovedHostelRequest(requestId, allocation) {
     }
     if (!student.exists() || !roster.exists()) {
       throw new Error('The Main Admin must approve the student registration before room allocation.');
+    }
+    if (
+      student.data().hostelStatus !== 'day' ||
+      roster.data().hostelStatus !== 'day'
+    ) {
+      throw new Error('The student is not eligible for a new hostel allocation.');
     }
     if (!roomSnapshot.exists()) {
       throw new Error('The selected room no longer exists. Refresh and try again.');
@@ -839,18 +1200,38 @@ export async function allocateHostelRoom(registration) {
   const { doc, runTransaction } = require('firebase/firestore');
   const registrationRef = doc(db, 'hostelRegistrations', studentId);
   const roomRef = doc(db, 'hostelRooms', roomId);
-  const studentRef = doc(db, 'hostelStudentRoster', studentId);
+  const studentRef = doc(db, 'students', studentId);
+  const rosterRef = doc(db, 'hostelStudentRoster', studentId);
+  const activeRequestRef = doc(db, 'hostelActiveRequests', studentId);
   await runTransaction(db, async transaction => {
-    const [existingRegistration, roomSnapshot, studentSnapshot] = await Promise.all([
+    const [
+      existingRegistration,
+      roomSnapshot,
+      studentSnapshot,
+      rosterSnapshot,
+      activeRequest,
+    ] = await Promise.all([
       transaction.get(registrationRef),
       transaction.get(roomRef),
       transaction.get(studentRef),
+      transaction.get(rosterRef),
+      transaction.get(activeRequestRef),
     ]);
     if (existingRegistration.exists()) {
       throw new Error('This student already has a hostel room allocation.');
     }
-    if (!studentSnapshot.exists()) {
-      throw new Error('Only a hostel resident can be allocated a room.');
+    if (
+      !studentSnapshot.exists() ||
+      !rosterSnapshot.exists() ||
+      studentSnapshot.data().hostelStatus !== 'resident' ||
+      rosterSnapshot.data().hostelStatus !== 'resident'
+    ) {
+      throw new Error('Only an approved hostel resident can be allocated a room.');
+    }
+    if (activeRequest.exists()) {
+      throw new Error(
+        'Process this student’s active hostel request through the review workflow.',
+      );
     }
     if (!roomSnapshot.exists()) {
       throw new Error('The selected room no longer exists. Refresh and try again.');

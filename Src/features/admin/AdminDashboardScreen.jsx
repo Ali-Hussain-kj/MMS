@@ -11,6 +11,7 @@ import {
 import { launchImageLibrary } from 'react-native-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import getStrings from '../../localization';
+import FinanceManagementScreen from './FinanceManagementScreen';
 import HostelManagementScreen from './HostelManagementScreen';
 import ParentAccessManagement from './ParentAccessManagement';
 import { classes, getProgramLabel, programs } from '../students/studentOptions';
@@ -24,6 +25,7 @@ const tabs = [
   { id: 'teachers', label: 'Teachers' },
   { id: 'parents', label: 'Parents' },
   { id: 'hostel', label: 'Hostel' },
+  { id: 'finance', label: 'Finance' },
 ];
 
 const emptyStudent = {
@@ -35,7 +37,7 @@ const emptyStudent = {
   contactNumber: '',
   program: '',
   className: '',
-  hostelStatus: '',
+  hostelStatus: 'day',
   photoUri: '',
 };
 
@@ -136,6 +138,9 @@ export default function AdminDashboardScreen({
   onAddTeacher,
   onUpdateTeacher,
   onDeleteTeacher,
+  financialRecords = [],
+  onSaveFinancialRecord,
+  onDeleteFinancialRecord,
   registrationRequests,
   students,
   teachers,
@@ -198,24 +203,28 @@ export default function AdminDashboardScreen({
     setNotice('');
   }
 
-  function saveStudent() {
+  async function saveStudent() {
     // Validate required enrollment details before calling the parent screen's save handler.
     const { values, mode } = studentForm;
     if (
       !values.studentName.trim() ||
       !values.fatherName.trim() ||
       !values.program ||
-      !values.hostelStatus ||
       (values.program === 'asri-taleem-class-1-10' && !values.className)
     ) {
       setNotice('Complete the student name, father name, program, class (if needed), and hostel status.');
       return;
     }
 
-    if (mode === 'edit') {
-      onUpdateStudent(values);
-    } else {
-      onAddStudent(values);
+    try {
+      if (mode === 'edit') {
+        await onUpdateStudent(values);
+      } else {
+        await onAddStudent(values);
+      }
+    } catch (error) {
+      setNotice(`Could not save student: ${error.message}`);
+      return;
     }
     setStudentForm(null);
     setNotice(mode === 'edit' ? 'Student information updated.' : 'Student added.');
@@ -254,7 +263,14 @@ export default function AdminDashboardScreen({
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: () => onDeleteStudent(student.id),
+          onPress: async () => {
+            try {
+              await onDeleteStudent(student.id);
+              setNotice('Student deleted.');
+            } catch (error) {
+              setNotice(`Could not delete student: ${error.message}`);
+            }
+          },
         },
       ],
     );
@@ -294,7 +310,7 @@ export default function AdminDashboardScreen({
     );
   }
 
-  function saveTeacher() {
+  async function saveTeacher() {
     // Convert the comma-separated subjects field into a clean list before saving.
     const { values, mode } = teacherForm;
     if (!values.name.trim() || !values.contactNumber.trim()) {
@@ -309,10 +325,15 @@ export default function AdminDashboardScreen({
         .map(subject => subject.trim())
         .filter(Boolean),
     };
-    if (mode === 'edit') {
-      onUpdateTeacher(teacher);
-    } else {
-      onAddTeacher(teacher);
+    try {
+      if (mode === 'edit') {
+        await onUpdateTeacher(teacher);
+      } else {
+        await onAddTeacher(teacher);
+      }
+    } catch (error) {
+      setNotice(`Could not save teacher profile: ${error.message}`);
+      return;
     }
     setTeacherForm(null);
     setNotice(mode === 'edit' ? 'Teacher profile updated.' : 'Teacher added.');
@@ -327,7 +348,14 @@ export default function AdminDashboardScreen({
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: () => onDeleteTeacher(teacher.id),
+          onPress: async () => {
+            try {
+              await onDeleteTeacher(teacher.id);
+              setNotice('Teacher profile deleted.');
+            } catch (error) {
+              setNotice(`Could not delete teacher profile: ${error.message}`);
+            }
+          },
         },
       ],
     );
@@ -499,16 +527,12 @@ export default function AdminDashboardScreen({
             />
           </>
         )}
-        <Text style={styles.fieldLabel}>Hostel status</Text>
-        <ChoiceGrid
-          items={[
-            { id: 'day', label: 'Day student' },
-            { id: 'resident', label: 'Hostel resident' },
-          ]}
-          selected={values.hostelStatus}
-          onSelect={status => updateStudentField('hostelStatus', status)}
-          testPrefix="student-hostel"
-        />
+        <Text style={styles.fieldLabel}>
+          Hostel status: {values.hostelStatus === 'resident' ? 'Hostel resident' : 'Day student'}
+        </Text>
+        <Text style={styles.parentAccessHint}>
+          Hostel status changes only after the Hostel Admin approves and processes an allocation or cancellation.
+        </Text>
         <View style={styles.formActions}>
           <ActionButton
             label={studentForm.mode === 'edit' ? 'Save changes' : 'Add student'}
@@ -697,6 +721,19 @@ export default function AdminDashboardScreen({
     );
   }
 
+  function renderFinance() {
+    return (
+      <FinanceManagementScreen
+        language={language}
+        records={financialRecords}
+        students={students}
+        teachers={teachers}
+        onSave={onSaveFinancialRecord}
+        onDelete={onDeleteFinancialRecord}
+      />
+    );
+  }
+
   // Resolve the current tab to its screen section.
   const tabContent = {
     overview: renderOverview,
@@ -705,6 +742,7 @@ export default function AdminDashboardScreen({
     teachers: renderTeachers,
     parents: renderParentAccess,
     hostel: renderHostel,
+    finance: renderFinance,
   }[activeTab];
 
   return (
@@ -755,6 +793,8 @@ export default function AdminDashboardScreen({
                   ? strings.parents
                   : tab.id === 'hostel'
                     ? strings.hostelManagement
+                    : tab.id === 'finance'
+                      ? strings.financeManagement
                     : strings[tab.id]}
                 {tab.id === 'requests' && registrationRequests.length > 0
                   ? ` (${registrationRequests.length})`

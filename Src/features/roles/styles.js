@@ -10,6 +10,116 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     padding: 20,
   },
+  keyboardAvoidingView: {
+    flex: 1,
+  },
+  loginContent: {
+    flexGrow: 1,
+    paddingHorizontal: 24,
+    paddingTop: 16,
+    paddingBottom: 16,
+  },
+  loginBrand: {
+    alignItems: 'center',
+    marginBottom: 22,
+    marginTop: 14,
+  },
+  loginLogo: {
+    height: 164,
+    width: 164,
+  },
+  loginTitle: {
+    color: '#17352B',
+    fontSize: 30,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  staffSelectionContent: {
+    flexGrow: 1,
+    padding: 22,
+  },
+  staffTitle: {
+    color: '#17352B',
+    fontSize: 28,
+    fontWeight: '800',
+    marginTop: 48,
+  },
+  staffLogo: {
+    alignSelf: 'center',
+    height: 136,
+    marginTop: 16,
+    width: 136,
+  },
+  staffRoleList: {
+    marginTop: 30,
+  },
+  staffRoleCard: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#DCE4E0',
+    borderRadius: 18,
+    borderWidth: 1,
+    flexDirection: 'row',
+    marginBottom: 16,
+    minHeight: 116,
+    padding: 18,
+  },
+  staffRoleIcon: {
+    alignItems: 'center',
+    backgroundColor: '#E3F2EC',
+    borderRadius: 16,
+    height: 54,
+    justifyContent: 'center',
+    marginRight: 16,
+    width: 54,
+  },
+  staffRoleIconText: {
+    fontSize: 26,
+  },
+  passwordInputRow: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#DCE4E0',
+    borderRadius: 12,
+    borderWidth: 1,
+    flexDirection: 'row',
+    minHeight: 54,
+  },
+  passwordInput: {
+    color: '#17352B',
+    flex: 1,
+    fontSize: 15,
+    minHeight: 52,
+    paddingHorizontal: 14,
+  },
+  passwordVisibilityButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  passwordVisibilityText: {
+    color: '#0B6B4B',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  submitButtonDisabled: {
+    opacity: 0.75,
+  },
+  loginFooter: {
+    marginTop: 'auto',
+    paddingBottom: 4,
+  },
+  staffLoginLink: {
+    alignItems: 'center',
+    paddingVertical: 14,
+  },
+  staffLoginText: {
+    color: '#718078',
+    fontSize: 13,
+  },
+  staffLoginAction: {
+    color: '#0B6B4B',
+    fontWeight: '700',
+  },
   eyebrow: {
     color: '#0B6B4B',
     fontSize: 12,

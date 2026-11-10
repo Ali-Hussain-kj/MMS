@@ -6,6 +6,7 @@ import styles from './styles';
 const sections = [
   'registration',
   'requests',
+  'registered',
   'rooms',
   'attendance',
   'meals',
@@ -83,9 +84,9 @@ function Button({
   );
 }
 
-function RecordCard({ title, details }) {
+function RecordCard({ title, details, testID }) {
   return (
-    <View style={styles.recordCard}>
+    <View style={styles.recordCard} testID={testID}>
       <Text style={styles.recordTitle}>{title}</Text>
       {details.map(detail => (
         <Text key={detail} style={styles.recordDetail}>
@@ -151,6 +152,8 @@ export default function HostelManagementScreen({
     visitTime: currentVisitTime(),
   });
   const [allocationForms, setAllocationForms] = useState({});
+  const [registeredSearch, setRegisteredSearch] = useState('');
+  const [registeredFloor, setRegisteredFloor] = useState('');
   const [notice, setNotice] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
@@ -166,6 +169,30 @@ export default function HostelManagementScreen({
     () => new Map(students.map(student => [student.id, student])),
     [students],
   );
+  const registeredFloors = useMemo(
+    () =>
+      [...new Set(registrations.map(item => item.floor).filter(Boolean))].sort(),
+    [registrations],
+  );
+  const filteredRegistrations = useMemo(() => {
+    const query = registeredSearch.trim().toLowerCase();
+    return registrations.filter(registration => {
+      const matchesSearch = [
+        registration.studentName,
+        registration.studentId,
+        registration.roomNumber,
+        registration.floor,
+        registration.bedNumber,
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(query);
+      return (
+        matchesSearch &&
+        (!registeredFloor || registration.floor === registeredFloor)
+      );
+    });
+  }, [registeredFloor, registeredSearch, registrations]);
 
   function getRoomOccupancy(room) {
     return Object.keys(room.allocations || {}).length;
@@ -350,13 +377,59 @@ export default function HostelManagementScreen({
             testID="hostel-allocate-room"
           />
         </View>
+        {renderRegisteredStudents()}
+      </>
+    );
+  }
+
+  function renderRegisteredStudents() {
+    return (
+      <>
         <Text style={styles.sectionTitle}>{strings.hostelResidents}</Text>
+        <TextInput
+          autoCapitalize="none"
+          onChangeText={setRegisteredSearch}
+          placeholder={strings.searchHostelStudents}
+          style={styles.formInput}
+          testID="hostel-registered-search"
+          value={registeredSearch}
+        />
+        <View style={styles.hostelChoiceRow}>
+          <Button
+            label={strings.allFloors}
+            onPress={() => setRegisteredFloor('')}
+            selected={!registeredFloor}
+            secondary
+            testID="hostel-floor-filter-all"
+          />
+          {registeredFloors.map(floor => (
+            <Button
+              key={floor}
+              label={`${strings.floor} ${floor}`}
+              onPress={() => setRegisteredFloor(floor)}
+              selected={registeredFloor === floor}
+              secondary
+              testID={`hostel-floor-filter-${floor}`}
+            />
+          ))}
+        </View>
+        <Text style={styles.hostelHint}>
+          {strings.registeredStudentCount.replace(
+            '{count}',
+            String(filteredRegistrations.length),
+          )}
+        </Text>
         {registrations.length === 0 ? (
           <Text style={styles.hostelEmpty}>{strings.noHostelResidents}</Text>
+        ) : filteredRegistrations.length === 0 ? (
+          <Text style={styles.hostelEmpty}>
+            {strings.noMatchingHostelStudents}
+          </Text>
         ) : (
-          registrations.map(registration => (
+          filteredRegistrations.map(registration => (
             <RecordCard
               key={registration.id}
+              testID={`registered-student-${registration.studentId}`}
               title={registration.studentName}
               details={[
                 `${strings.studentId}: ${registration.studentId}`,
@@ -755,6 +828,7 @@ export default function HostelManagementScreen({
   const content = {
     registration: renderRegistration,
     requests: renderRequests,
+    registered: renderRegisteredStudents,
     rooms: renderRoomForm,
     attendance: renderAttendance,
     meals: renderMeals,

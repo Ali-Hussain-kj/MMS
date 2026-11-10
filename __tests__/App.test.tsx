@@ -11,6 +11,7 @@ import {
   createParentAccount,
   sendParentPasswordReset,
   signInForRole,
+  subscribeToAuthSession,
 } from '../Src/services/firebase/parentMonitoring';
 
 jest.mock('../Src/services/firebase/parentMonitoring', () => ({
@@ -23,18 +24,35 @@ jest.mock('../Src/services/firebase/parentMonitoring', () => ({
   createHostelRoom: jest.fn(),
   recordHostelVisitor: jest.fn(),
   removeStudent: jest.fn(),
+  removeFinancialRecord: jest.fn().mockResolvedValue(undefined),
+  removeTeacherProfile: jest.fn().mockResolvedValue(undefined),
   saveStudent: jest.fn(),
+  saveFinancialRecord: jest.fn().mockResolvedValue(undefined),
+  saveTeacherProfile: jest.fn().mockResolvedValue(undefined),
   saveHostelMeals: jest.fn(),
   saveHostelAttendance: jest.fn(),
   reviewHostelRequest: jest.fn().mockResolvedValue(undefined),
   sendParentPasswordReset: jest.fn().mockResolvedValue(undefined),
   signInForRole: jest.fn(),
-  signOutUser: jest.fn(),
+  signOutUser: jest.fn().mockResolvedValue(undefined),
+  saveSchoolSubjects: jest.fn().mockResolvedValue(undefined),
+  saveTeacherReport: jest.fn().mockResolvedValue(undefined),
+  subscribeToParentHostelRequests: jest.fn().mockReturnValue(jest.fn()),
+  subscribeToParentReports: jest.fn().mockReturnValue(jest.fn()),
+  subscribeToSchoolSubjects: jest.fn().mockReturnValue(jest.fn()),
+  subscribeToTeacherReports: jest.fn().mockReturnValue(jest.fn()),
+  subscribeToAuthSession: jest.fn(onSession => {
+    onSession(null);
+    return jest.fn();
+  }),
   subscribeToHostelCollection: jest.fn().mockReturnValue(jest.fn()),
   subscribeToHostelRequests: jest.fn().mockReturnValue(jest.fn()),
   subscribeToHostelStudents: jest.fn().mockReturnValue(jest.fn()),
   subscribeToRegistrationRequests: jest.fn().mockReturnValue(jest.fn()),
   subscribeToStudents: jest.fn().mockReturnValue(jest.fn()),
+  subscribeToTeachers: jest.fn().mockReturnValue(jest.fn()),
+  subscribeToFinancialRecords: jest.fn().mockReturnValue(jest.fn()),
+  subscribeToTeacherStudents: jest.fn().mockReturnValue(jest.fn()),
   updateStudentClass: jest.fn(),
 }));
 
@@ -52,7 +70,90 @@ jest.mock('react-native-image-picker', () => ({
   launchImageLibrary: jest.fn(),
 }));
 
-test('shared admin login routes a hostel admin to the hostel-only dashboard', async () => {
+test('new app launch shows the Parent Login first with the supplied MMS logo', () => {
+  let renderer;
+  ReactTestRenderer.act(() => {
+    renderer = ReactTestRenderer.create(<App />);
+  });
+
+  expect(renderer.root.findByProps({ testID: 'email-input' })).toBeTruthy();
+  expect(renderer.root.findByProps({ testID: 'password-input' })).toBeTruthy();
+  expect(renderer.root.findByProps({ testID: 'mms-logo' })).toBeTruthy();
+  expect(renderer.root.findByProps({ testID: 'staff-login' })).toBeTruthy();
+  expect(
+    renderer.root
+      .findAllByType(Text)
+      .some(text => text.props.children === 'Welcome Back'),
+  ).toBe(true);
+});
+
+test('password visibility can be toggled on the login screen', () => {
+  let renderer;
+  ReactTestRenderer.act(() => {
+    renderer = ReactTestRenderer.create(<App />);
+  });
+  expect(
+    renderer.root.findByProps({ testID: 'password-input' }).props.secureTextEntry,
+  ).toBe(true);
+  ReactTestRenderer.act(() => {
+    renderer.root
+      .findByProps({ testID: 'password-visibility' })
+      .props.onPress();
+  });
+  expect(
+    renderer.root.findByProps({ testID: 'password-input' }).props.secureTextEntry,
+  ).toBe(false);
+});
+
+test('restores a persisted session using the Firestore role', () => {
+  subscribeToAuthSession.mockImplementationOnce(onSession => {
+    onSession({
+      uid: 'hostel-admin-1',
+      email: 'hostel@example.com',
+      role: 'hostelAdmin',
+    });
+    return jest.fn();
+  });
+
+  let renderer;
+  ReactTestRenderer.act(() => {
+    renderer = ReactTestRenderer.create(<App />);
+  });
+
+  expect(
+    renderer.root.findByProps({ testID: 'hostel-admin-sign-out' }),
+  ).toBeTruthy();
+  expect(() =>
+    renderer.root.findByProps({ testID: 'admin-tab-students' }),
+  ).toThrow();
+});
+
+test('staff role selection navigates to the selected login and returns to parent login', () => {
+  let renderer;
+  ReactTestRenderer.act(() => {
+    renderer = ReactTestRenderer.create(<App />);
+  });
+  ReactTestRenderer.act(() => {
+    renderer.root.findByProps({ testID: 'staff-login' }).props.onPress();
+  });
+
+  expect(renderer.root.findByProps({ testID: 'staff-role-admin' })).toBeTruthy();
+  expect(renderer.root.findByProps({ testID: 'staff-role-teacher' })).toBeTruthy();
+  ReactTestRenderer.act(() => {
+    renderer.root.findByProps({ testID: 'staff-role-teacher' }).props.onPress();
+  });
+  expect(renderer.root.findByProps({ testID: 'auth-submit' })).toBeTruthy();
+  ReactTestRenderer.act(() => {
+    renderer.root.findByProps({ testID: 'back-button' }).props.onPress();
+  });
+  expect(renderer.root.findByProps({ testID: 'staff-role-admin' })).toBeTruthy();
+  ReactTestRenderer.act(() => {
+    renderer.root.findByProps({ testID: 'staff-role-back' }).props.onPress();
+  });
+  expect(renderer.root.findByProps({ testID: 'staff-login' })).toBeTruthy();
+});
+
+test('staff admin login routes a hostel admin to the hostel-only dashboard', async () => {
   signInForRole.mockResolvedValue({
     uid: 'hostel-admin-1',
     email: 'hostel@example.com',
@@ -63,7 +164,10 @@ test('shared admin login routes a hostel admin to the hostel-only dashboard', as
     renderer = ReactTestRenderer.create(<App />);
   });
   ReactTestRenderer.act(() => {
-    renderer.root.findByProps({ testID: 'role-admin' }).props.onPress();
+    renderer.root.findByProps({ testID: 'staff-login' }).props.onPress();
+  });
+  ReactTestRenderer.act(() => {
+    renderer.root.findByProps({ testID: 'staff-role-admin' }).props.onPress();
   });
   ReactTestRenderer.act(() => {
     renderer.root
@@ -89,13 +193,112 @@ test('shared admin login routes a hostel admin to the hostel-only dashboard', as
   expect(() => renderer.root.findByProps({ testID: 'admin-tab-students' })).toThrow();
 });
 
-test('parent login sends a reset email to the entered address', async () => {
+test('shared Admin Login routes a verified main admin to the main dashboard', async () => {
+  signInForRole.mockResolvedValue({
+    uid: 'admin-1',
+    email: 'admin@example.com',
+    role: 'admin',
+  });
   let renderer;
   ReactTestRenderer.act(() => {
     renderer = ReactTestRenderer.create(<App />);
   });
   ReactTestRenderer.act(() => {
-    renderer.root.findByProps({ testID: 'role-parent' }).props.onPress();
+    renderer.root.findByProps({ testID: 'staff-login' }).props.onPress();
+  });
+  ReactTestRenderer.act(() => {
+    renderer.root.findByProps({ testID: 'staff-role-admin' }).props.onPress();
+  });
+  await ReactTestRenderer.act(async () => {
+    await renderer.root.findByProps({ testID: 'auth-submit' }).props.onPress();
+  });
+
+  expect(renderer.root.findByProps({ testID: 'admin-tab-students' })).toBeTruthy();
+  expect(() => renderer.root.findByProps({ testID: 'hostel-admin-sign-out' })).toThrow();
+});
+
+test('teacher login routes to the teacher dashboard only for a verified teacher role', async () => {
+  signInForRole.mockResolvedValue({
+    uid: 'teacher-1',
+    email: 'teacher@example.com',
+    role: 'teacher',
+  });
+  let renderer;
+  ReactTestRenderer.act(() => {
+    renderer = ReactTestRenderer.create(<App />);
+  });
+  ReactTestRenderer.act(() => {
+    renderer.root.findByProps({ testID: 'staff-login' }).props.onPress();
+  });
+  ReactTestRenderer.act(() => {
+    renderer.root.findByProps({ testID: 'staff-role-teacher' }).props.onPress();
+  });
+  await ReactTestRenderer.act(async () => {
+    await renderer.root.findByProps({ testID: 'auth-submit' }).props.onPress();
+  });
+
+  expect(signInForRole).toHaveBeenCalledWith('', '', 'teacher');
+  expect(renderer.root.findByProps({ testID: 'teacher-exit' })).toBeTruthy();
+  expect(() => renderer.root.findByProps({ testID: 'admin-tab-students' })).toThrow();
+});
+
+test('selected staff category cannot open a dashboard for a different Firestore role', async () => {
+  signInForRole.mockResolvedValue({
+    uid: 'parent-1',
+    email: 'parent@example.com',
+    role: 'parent',
+  });
+  let renderer;
+  ReactTestRenderer.act(() => {
+    renderer = ReactTestRenderer.create(<App />);
+  });
+  ReactTestRenderer.act(() => {
+    renderer.root.findByProps({ testID: 'staff-login' }).props.onPress();
+  });
+  ReactTestRenderer.act(() => {
+    renderer.root.findByProps({ testID: 'staff-role-teacher' }).props.onPress();
+  });
+  await ReactTestRenderer.act(async () => {
+    await renderer.root.findByProps({ testID: 'auth-submit' }).props.onPress();
+  });
+
+  expect(() => renderer.root.findByProps({ testID: 'parent-sign-out' })).toThrow();
+  expect(() => renderer.root.findByProps({ testID: 'teacher-exit' })).toThrow();
+  expect(renderer.root.findByProps({ testID: 'email-input' })).toBeTruthy();
+  expect(
+    renderer.root
+      .findAllByType(Text)
+      .some(text => text.props.children === 'This account does not match the selected login type. Please choose the correct staff category.'),
+  ).toBe(true);
+});
+
+test('parent login routes an authenticated parent to the parent dashboard', async () => {
+  signInForRole.mockResolvedValue({
+    uid: 'parent-1',
+    email: 'parent@example.com',
+    role: 'parent',
+  });
+  let renderer;
+  ReactTestRenderer.act(() => {
+    renderer = ReactTestRenderer.create(<App />);
+  });
+  await ReactTestRenderer.act(async () => {
+    await renderer.root.findByProps({ testID: 'auth-submit' }).props.onPress();
+  });
+
+  expect(signInForRole).toHaveBeenCalledWith('', '', 'parent');
+  expect(renderer.root.findByProps({ testID: 'parent-sign-out' })).toBeTruthy();
+  await ReactTestRenderer.act(async () => {
+    await renderer.root.findByProps({ testID: 'parent-sign-out' }).props.onPress();
+  });
+  expect(renderer.root.findByProps({ testID: 'email-input' })).toBeTruthy();
+  expect(renderer.root.findByProps({ testID: 'staff-login' })).toBeTruthy();
+});
+
+test('parent login sends a reset email to the entered address', async () => {
+  let renderer;
+  ReactTestRenderer.act(() => {
+    renderer = ReactTestRenderer.create(<App />);
   });
   ReactTestRenderer.act(() => {
     renderer.root
@@ -124,9 +327,8 @@ test('student enrollment creates parent login and submits request without saving
     renderer = ReactTestRenderer.create(<App />);
   });
 
-  expect(renderer.root.findByProps({ testID: 'role-admin' })).toBeTruthy();
-  expect(renderer.root.findByProps({ testID: 'role-teacher' })).toBeTruthy();
-  expect(renderer.root.findByProps({ testID: 'role-parent' })).toBeTruthy();
+  expect(renderer.root.findByProps({ testID: 'email-input' })).toBeTruthy();
+  expect(renderer.root.findByProps({ testID: 'staff-login' })).toBeTruthy();
   ReactTestRenderer.act(() => {
     renderer.root.findByProps({ testID: 'language-toggle' }).props.onPress();
   });
@@ -136,15 +338,12 @@ test('student enrollment creates parent login and submits request without saving
   expect(
     renderer.root
       .findAllByType(Text)
-      .some(text => text.props.children === 'ایم ایم ایس میں خوش آمدید'),
+      .some(text => text.props.children === 'خوش آمدید'),
   ).toBe(true);
   ReactTestRenderer.act(() => {
     renderer.root.findByProps({ testID: 'language-toggle' }).props.onPress();
   });
 
-  ReactTestRenderer.act(() => {
-    renderer.root.findByProps({ testID: 'role-parent' }).props.onPress();
-  });
   ReactTestRenderer.act(() => {
     renderer.root.findByProps({ testID: 'parent-register' }).props.onPress();
   });
@@ -201,15 +400,8 @@ test('student enrollment creates parent login and submits request without saving
       .findByProps({ testID: 'back-to-parent-login' })
       .props.onPress();
   });
-  ReactTestRenderer.act(() => {
-    renderer.root.findByProps({ testID: 'back-button' }).props.onPress();
-  });
-  ReactTestRenderer.act(() => {
-    renderer.root.findByProps({ testID: 'role-admin' }).props.onPress();
-  });
-  expect(() =>
-    renderer.root.findByProps({ testID: 'admin-dashboard-preview' }),
-  ).toThrow();
+  expect(renderer.root.findByProps({ testID: 'email-input' })).toBeTruthy();
+  expect(renderer.root.findByProps({ testID: 'staff-login' })).toBeTruthy();
 });
 
 test('teacher board shows only students supplied from the live database', () => {

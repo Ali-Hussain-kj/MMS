@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View } from 'react-native';
+import { ActivityIndicator, Text, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import LanguageToggle from './Src/components/LanguageToggle';
 import appStyles from './Src/components/styles';
@@ -7,7 +7,9 @@ import AdminDashboardScreen from './Src/features/admin/AdminDashboardScreen';
 import HostelAdminDashboardScreen from './Src/features/admin/HostelAdminDashboardScreen';
 import ParentMonitoringScreen from './Src/features/parent/ParentMonitoringScreen';
 import RoleSelectionScreen from './Src/features/roles/RoleSelectionScreen';
+import StaffRoleSelectionScreen from './Src/features/roles/StaffRoleSelectionScreen';
 import TeacherDashboardScreen from './Src/features/teacher/TeacherDashboardScreen';
+import getStrings from './Src/localization';
 import {
   approveRegistrationRequest,
   allocateApprovedHostelRequest,
@@ -16,27 +18,38 @@ import {
   createHostelRoom,
   declineRegistrationRequest,
   recordHostelVisitor,
+  removeTeacherProfile,
+  removeFinancialRecord,
   reviewHostelRequest,
   removeStudent as removeStudentRecord,
   saveStudent as saveStudentRecord,
+  saveTeacherProfile,
+  saveFinancialRecord,
   saveHostelMeals,
   saveHostelAttendance,
   signOutUser,
+  subscribeToAuthSession,
   subscribeToHostelCollection,
   subscribeToHostelRequests,
   subscribeToHostelStudents,
   subscribeToRegistrationRequests,
   subscribeToStudents,
+  subscribeToTeacherStudents,
+  subscribeToTeachers,
+  subscribeToFinancialRecords,
   updateStudentClass,
 } from './Src/services/firebase/parentMonitoring';
 
 export default function App() {
-  const [activeScreen, setActiveScreen] = useState('roles');
+  const [activeScreen, setActiveScreen] = useState('login');
+  const [loginRoute, setLoginRoute] = useState('parent');
+  const [isAuthReady, setIsAuthReady] = useState(false);
   const [language, setLanguage] = useState('en');
   const [registrationRequests, setRegistrationRequests] = useState([]);
   const [students, setStudents] = useState([]);
   const [hostelStudents, setHostelStudents] = useState([]);
   const [teachers, setTeachers] = useState([]);
+  const [financialRecords, setFinancialRecords] = useState([]);
   const [hostelRooms, setHostelRooms] = useState([]);
   const [hostelRegistrations, setHostelRegistrations] = useState([]);
   const [hostelRequests, setHostelRequests] = useState([]);
@@ -45,6 +58,50 @@ export default function App() {
   const [hostelVisitors, setHostelVisitors] = useState([]);
   const [authSession, setAuthSession] = useState(null);
   const [backendNotice, setBackendNotice] = useState('');
+  const strings = getStrings(language);
+
+  useEffect(() => {
+    let isMounted = true;
+    let unsubscribe;
+
+    function handleRestoredSession(session) {
+      if (!isMounted) {
+        return;
+      }
+      setAuthSession(session);
+      setActiveScreen(session?.role || 'login');
+      if (!session) {
+        setLoginRoute('parent');
+      }
+      setIsAuthReady(true);
+      if (session) {
+        setBackendNotice('');
+      }
+    }
+
+    try {
+      unsubscribe = subscribeToAuthSession(
+        handleRestoredSession,
+        error => {
+          if (isMounted) {
+            setAuthSession(null);
+            setLoginRoute('parent');
+            setActiveScreen('login');
+            setBackendNotice(error.message);
+            setIsAuthReady(true);
+          }
+        },
+      );
+    } catch (error) {
+      setBackendNotice(error.message);
+      setIsAuthReady(true);
+    }
+
+    return () => {
+      isMounted = false;
+      unsubscribe?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (
@@ -66,23 +123,40 @@ export default function App() {
       };
     }
 
+    if (authSession.role === 'teacher') {
+      return subscribeToTeacherStudents(
+        authSession.uid,
+        setStudents,
+        error => setBackendNotice(error.message),
+      );
+    }
+
     const unsubscribeStudents = subscribeToStudents(
       setStudents,
       error => setBackendNotice(error.message),
-      { syncHostelRoster: authSession.role === 'admin' },
+      { syncHostelRoster: true },
     );
-    if (authSession.role === 'teacher') {
-      return unsubscribeStudents;
-    }
-
     const unsubscribeRequests = subscribeToRegistrationRequests(
       setRegistrationRequests,
       error => setBackendNotice(error.message),
     );
+    const unsubscribeTeachers =
+      authSession.role === 'admin'
+        ? subscribeToTeachers(setTeachers, error => setBackendNotice(error.message))
+        : undefined;
+    const unsubscribeFinancialRecords =
+      authSession.role === 'admin'
+        ? subscribeToFinancialRecords(
+            setFinancialRecords,
+            error => setBackendNotice(error.message),
+          )
+        : undefined;
     const unsubscribeHostelData = subscribeToHostelData();
     return () => {
       unsubscribeStudents();
       unsubscribeRequests();
+      unsubscribeTeachers?.();
+      unsubscribeFinancialRecords?.();
       unsubscribeHostelData();
     };
   }, [authSession]);
@@ -129,7 +203,21 @@ export default function App() {
   }
 
   function handleAuthentication(session) {
+    const allowedRoles =
+      loginRoute === 'admin'
+        ? ['admin', 'hostelAdmin']
+        : [loginRoute];
+    if (!session || !allowedRoles.includes(session.role)) {
+      signOutUser().catch(error => setBackendNotice(error.message));
+      setAuthSession(null);
+      setActiveScreen('login');
+      setLoginRoute('parent');
+      setBackendNotice(strings.loginCategoryMismatch);
+      return;
+    }
+
     setAuthSession(session);
+    setIsAuthReady(true);
     setBackendNotice('');
     setActiveScreen(session.role);
   }
@@ -140,10 +228,13 @@ export default function App() {
         await signOutUser();
       } catch (error) {
         setBackendNotice(error.message);
+        return;
       }
     }
     setAuthSession(null);
     setStudents([]);
+    setTeachers([]);
+    setFinancialRecords([]);
     setHostelStudents([]);
     setRegistrationRequests([]);
     setHostelRooms([]);
@@ -152,7 +243,8 @@ export default function App() {
     setHostelMeals([]);
     setHostelAttendance([]);
     setHostelVisitors([]);
-    setActiveScreen('roles');
+    setLoginRoute('parent');
+    setActiveScreen('login');
   }
 
   async function addRegistrationRequest(request, credentials) {
@@ -175,80 +267,61 @@ export default function App() {
     }
   }
 
-  function addStudent(student) {
+  async function addStudent(student) {
     const newStudent = { ...student, id: `student-${Date.now()}` };
-    setStudents(current => [...current, newStudent]);
-    if (authSession?.role === 'admin') {
-      saveStudentRecord(newStudent).catch(error =>
-        setBackendNotice(error.message),
-      );
-    }
+    await saveStudentRecord(newStudent);
   }
 
-  function updateStudent(updatedStudent) {
-    setStudents(current =>
-      current.map(student =>
-        student.id === updatedStudent.id ? updatedStudent : student,
-      ),
-    );
-    if (authSession?.role === 'admin') {
-      saveStudentRecord(updatedStudent).catch(error =>
-        setBackendNotice(error.message),
-      );
-    }
+  async function updateStudent(updatedStudent) {
+    await saveStudentRecord(updatedStudent);
   }
 
-  function deleteStudent(studentId) {
-    setStudents(current => current.filter(student => student.id !== studentId));
-    if (authSession?.role === 'admin') {
-      removeStudentRecord(studentId).catch(error =>
-        setBackendNotice(error.message),
-      );
-    }
+  async function deleteStudent(studentId) {
+    await removeStudentRecord(studentId);
   }
 
-  function addTeacher(teacher) {
-    setTeachers(current => [
-      ...current,
-      { ...teacher, id: `teacher-${Date.now()}` },
-    ]);
+  async function addTeacher(teacher) {
+    const newTeacher = { ...teacher, id: `teacher-${Date.now()}` };
+    await saveTeacherProfile(newTeacher);
   }
 
-  function updateTeacher(updatedTeacher) {
-    setTeachers(current =>
-      current.map(teacher =>
-        teacher.id === updatedTeacher.id ? updatedTeacher : teacher,
-      ),
-    );
+  async function updateTeacher(updatedTeacher) {
+    await saveTeacherProfile(updatedTeacher);
   }
 
-  function deleteTeacher(teacherId) {
-    setTeachers(current => current.filter(teacher => teacher.id !== teacherId));
+  async function deleteTeacher(teacherId) {
+    await removeTeacherProfile(teacherId);
   }
 
-  function promoteStudent(studentId, className) {
-    setStudents(current =>
-      current.map(student =>
-        student.id === studentId ? { ...student, className } : student,
-      ),
-    );
-    if (authSession?.role === 'teacher') {
-      updateStudentClass(studentId, className).catch(error =>
-        setBackendNotice(error.message),
-      );
-    }
+  async function deleteFinancialEntry(recordId) {
+    await removeFinancialRecord(recordId);
+  }
+
+  async function promoteStudent(studentId, className) {
+    await updateStudentClass(studentId, className);
   }
 
   return (
     <SafeAreaProvider>
-      <View style={appStyles.container}>
-        {activeScreen === 'parent' && authSession ? (
+      <View
+        style={[
+          appStyles.container,
+          language === 'ur' ? appStyles.rightToLeft : appStyles.leftToRight,
+        ]}>
+        {!isAuthReady ? (
+          <View
+            accessibilityRole="progressbar"
+            style={appStyles.sessionLoading}>
+            <ActivityIndicator color="#0B6B4B" />
+            <Text>{strings.restoringSession}</Text>
+          </View>
+        ) : activeScreen === 'parent' && authSession?.role === 'parent' ? (
           <ParentMonitoringScreen
             language={language}
             user={authSession}
             onSignOut={returnToRoles}
           />
-        ) : activeScreen === 'teacher' ? (
+        ) : activeScreen === 'teacher' && authSession?.role === 'teacher' ? (
           <TeacherDashboardScreen
             language={language}
             onBack={returnToRoles}
@@ -257,7 +330,8 @@ export default function App() {
             backendNotice={backendNotice}
             isAuthenticated={authSession?.role === 'teacher'}
           />
-        ) : activeScreen === 'hostelAdmin' && authSession ? (
+        ) : activeScreen === 'hostelAdmin' &&
+          ['admin', 'hostelAdmin'].includes(authSession?.role) ? (
           <HostelAdminDashboardScreen
             language={language}
             onSignOut={returnToRoles}
@@ -277,7 +351,7 @@ export default function App() {
             onSaveMeals={saveHostelMeals}
             onRecordVisitor={recordHostelVisitor}
           />
-        ) : activeScreen === 'admin' ? (
+        ) : activeScreen === 'admin' && authSession?.role === 'admin' ? (
           <AdminDashboardScreen
             language={language}
             isAuthenticated={authSession?.role === 'admin'}
@@ -290,6 +364,9 @@ export default function App() {
             onAddTeacher={addTeacher}
             onUpdateTeacher={updateTeacher}
             onDeleteTeacher={deleteTeacher}
+            financialRecords={financialRecords}
+            onSaveFinancialRecord={saveFinancialRecord}
+            onDeleteFinancialRecord={deleteFinancialEntry}
             registrationRequests={registrationRequests}
             students={students}
             teachers={teachers}
@@ -308,11 +385,38 @@ export default function App() {
             onSaveHostelAttendance={saveHostelAttendance}
             onRecordHostelVisitor={recordHostelVisitor}
           />
+        ) : activeScreen === 'staffRoles' ? (
+          <StaffRoleSelectionScreen
+            language={language}
+            onBack={() => {
+              setLoginRoute('parent');
+              setActiveScreen('login');
+              setBackendNotice('');
+            }}
+            onSelectRole={role => {
+              setLoginRoute(role);
+              setActiveScreen('login');
+              setBackendNotice('');
+            }}
+          />
         ) : (
           <RoleSelectionScreen
+            key={loginRoute}
             language={language}
+            authNotice={backendNotice}
+            loginRole={loginRoute}
             onAuthenticate={handleAuthentication}
             onRegisterStudent={addRegistrationRequest}
+            onBack={() => {
+              setLoginRoute('parent');
+              setActiveScreen('staffRoles');
+              setBackendNotice('');
+            }}
+            onStaffLogin={() => {
+              setLoginRoute('parent');
+              setActiveScreen('staffRoles');
+              setBackendNotice('');
+            }}
           />
         )}
         <LanguageToggle

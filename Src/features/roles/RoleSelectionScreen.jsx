@@ -1,5 +1,9 @@
 import React, { useState } from 'react';
 import {
+  ActivityIndicator,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   Text,
@@ -15,45 +19,39 @@ import {
 } from '../../services/firebase/parentMonitoring';
 import styles from './styles';
 
+const roleTitleKeys = {
+  admin: 'roleAdmin',
+  teacher: 'roleTeacher',
+  parent: 'roleParent',
+};
+
 export default function RoleSelectionScreen({
   language,
+  authNotice,
+  loginRole = 'parent',
   onAuthenticate,
   onRegisterStudent,
+  onBack,
+  onStaffLogin,
 }) {
   const strings = getStrings(language);
-  // Role IDs stay language-independent even when the visible titles are translated.
-  const roles = [
-    {
-      id: 'admin',
-      title: strings.roleAdmin,
-      description: strings.roleAdminDescription,
-    },
-    {
-      id: 'teacher',
-      title: strings.roleTeacher,
-      description: strings.roleTeacherDescription,
-    },
-    {
-      id: 'parent',
-      title: strings.roleParent,
-      description: strings.roleParentDescription,
-    },
-  ];
-  const [selectedRole, setSelectedRole] = useState(null);
+  const roleTitle = strings[roleTitleKeys[loginRole]];
   const [isRegistering, setIsRegistering] = useState(false);
   const [message, setMessage] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [isSendingReset, setIsSendingReset] = useState(false);
-  const activeRole = roles.find(role => role.id === selectedRole?.id);
 
-  // Sign-in checks both the Firebase account and its role in the users collection.
   async function authenticate() {
+    if (isAuthenticating || isSendingReset) {
+      return;
+    }
     setIsAuthenticating(true);
     setMessage('');
     try {
-      const session = await signInForRole(email, password, activeRole.id);
+      const session = await signInForRole(email, password, loginRole);
       onAuthenticate(session);
     } catch (error) {
       setMessage(
@@ -79,9 +77,7 @@ export default function RoleSelectionScreen({
     setIsSendingReset(true);
     try {
       await sendParentPasswordReset(email);
-      setMessage(
-        strings.passwordResetSent.replace('{email}', email.trim()),
-      );
+      setMessage(strings.passwordResetSent.replace('{email}', email.trim()));
     } catch (error) {
       setMessage(error.message);
     } finally {
@@ -89,8 +85,7 @@ export default function RoleSelectionScreen({
     }
   }
 
-  // Enrollment collects the parent's login credentials together with student details.
-  if (selectedRole?.id === 'parent' && isRegistering) {
+  if (loginRole === 'parent' && isRegistering) {
     return (
       <ParentRegisterScreen
         language={language}
@@ -100,7 +95,6 @@ export default function RoleSelectionScreen({
           setMessage('');
         }}
         onBackToRoles={() => {
-          setSelectedRole(null);
           setIsRegistering(false);
           setMessage('');
         }}
@@ -108,30 +102,50 @@ export default function RoleSelectionScreen({
     );
   }
 
-  // After choosing a role, show its login form and any role-specific actions.
-  if (selectedRole) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <ScrollView contentContainerStyle={styles.content}>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => {
-              setSelectedRole(null);
-              setIsRegistering(false);
-              setMessage('');
-            }}
-            style={styles.backButton}
-            testID="back-button">
-            <Text style={styles.backButtonText}>{strings.back}</Text>
-          </Pressable>
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.keyboardAvoidingView}>
+        <ScrollView
+          contentContainerStyle={styles.loginContent}
+          keyboardShouldPersistTaps="handled">
+          {loginRole !== 'parent' ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={onBack}
+              style={styles.backButton}
+              testID="back-button">
+              <Text style={styles.backButtonText}>{strings.back}</Text>
+            </Pressable>
+          ) : null}
 
-          <Text style={styles.eyebrow}>{strings.appName.toUpperCase()}</Text>
-          <Text style={styles.title}>
-            {strings.loginTitle.replace('{role}', activeRole.title)}
+          <View style={styles.loginBrand}>
+            <Image
+              accessibilityLabel={strings.appName}
+              resizeMode="contain"
+              source={require('../../assets/mms-logo.png')}
+              style={styles.loginLogo}
+              testID="mms-logo"
+            />
+            <Text style={styles.eyebrow}>{strings.appName.toUpperCase()}</Text>
+          </View>
+          <Text style={styles.loginTitle}>
+            {loginRole === 'parent'
+              ? strings.welcomeBack
+              : strings.loginTitle.replace('{role}', roleTitle)}
           </Text>
           <Text style={styles.subtitle}>
-            {strings.loginSubtitle.replace('{role}', activeRole.title)}
+            {loginRole === 'parent'
+              ? strings.parentLoginSubtitle
+              : strings.loginSubtitle.replace('{role}', roleTitle)}
           </Text>
+
+          {authNotice ? (
+            <Text accessibilityRole="alert" style={styles.message}>
+              {authNotice}
+            </Text>
+          ) : null}
 
           <View style={styles.form}>
             <Text style={styles.inputLabel}>{strings.email}</Text>
@@ -143,42 +157,63 @@ export default function RoleSelectionScreen({
                 setEmail(value);
                 setMessage('');
               }}
+              onSubmitEditing={() => {}}
               placeholder="name@example.com"
+              returnKeyType="next"
               style={styles.input}
               testID="email-input"
               value={email}
             />
 
             <Text style={styles.inputLabel}>{strings.password}</Text>
-            <TextInput
-              autoCapitalize="none"
-              autoComplete="password"
-              onChangeText={value => {
-                setPassword(value);
-                setMessage('');
-              }}
-              placeholder={strings.enterPassword}
-              secureTextEntry
-              style={styles.input}
-              testID="password-input"
-              value={password}
-            />
+            <View style={styles.passwordInputRow}>
+              <TextInput
+                autoCapitalize="none"
+                autoComplete="password"
+                onChangeText={value => {
+                  setPassword(value);
+                  setMessage('');
+                }}
+                onSubmitEditing={authenticate}
+                placeholder={strings.enterPassword}
+                returnKeyType="go"
+                secureTextEntry={!isPasswordVisible}
+                style={styles.passwordInput}
+                testID="password-input"
+                value={password}
+              />
+              <Pressable
+                accessibilityLabel={
+                  isPasswordVisible ? strings.hidePassword : strings.showPassword
+                }
+                accessibilityRole="button"
+                onPress={() => setIsPasswordVisible(value => !value)}
+                style={styles.passwordVisibilityButton}
+                testID="password-visibility">
+                <Text style={styles.passwordVisibilityText}>
+                  {isPasswordVisible ? strings.hidePassword : strings.showPassword}
+                </Text>
+              </Pressable>
+            </View>
 
             <Pressable
               accessibilityRole="button"
-              disabled={isAuthenticating || isSendingReset}
+              disabled={isAuthenticating || isSendingReset || !email.trim() || !password}
               onPress={authenticate}
               style={({ pressed }) => [
                 styles.submitButton,
                 pressed && styles.submitButtonPressed,
+                (isAuthenticating || isSendingReset) && styles.submitButtonDisabled,
               ]}
               testID="auth-submit">
-              <Text style={styles.submitButtonText}>
-                {strings.logIn}
-              </Text>
+              {isAuthenticating ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.submitButtonText}>{strings.logIn}</Text>
+              )}
             </Pressable>
 
-            {activeRole.id === 'parent' ? (
+            {loginRole === 'parent' ? (
               <Pressable
                 accessibilityRole="button"
                 disabled={isAuthenticating || isSendingReset}
@@ -186,7 +221,9 @@ export default function RoleSelectionScreen({
                 style={styles.passwordResetButton}
                 testID="parent-forgot-password">
                 <Text style={styles.registerLink}>
-                  {isSendingReset ? strings.sendingPasswordReset : strings.forgotPassword}
+                  {isSendingReset
+                    ? strings.sendingPasswordReset
+                    : strings.forgotPassword}
                 </Text>
               </Pressable>
             ) : null}
@@ -196,55 +233,38 @@ export default function RoleSelectionScreen({
                 {message}
               </Text>
             ) : null}
-
           </View>
 
-          {activeRole.id === 'parent' && (
-            <View style={styles.registerFooter}>
-              <Text style={styles.footerText}>{strings.enrollPrompt}</Text>
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => {
-                  setIsRegistering(true);
-                  setMessage('');
-                }}
-                testID="parent-register">
-                <Text style={styles.registerLink}>{strings.registerStudent}</Text>
-              </Pressable>
-            </View>
-          )}
+          <View style={styles.loginFooter}>
+            {loginRole === 'parent' ? (
+              <>
+                <View style={styles.registerFooter}>
+                  <Text style={styles.footerText}>{strings.enrollPrompt}</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => {
+                      setIsRegistering(true);
+                      setMessage('');
+                    }}
+                    testID="parent-register">
+                    <Text style={styles.registerLink}>{strings.registerStudent}</Text>
+                  </Pressable>
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={onStaffLogin}
+                  style={styles.staffLoginLink}
+                  testID="staff-login">
+                  <Text style={styles.staffLoginText}>
+                    {strings.staffLoginPrompt}{' '}
+                    <Text style={styles.staffLoginAction}>{strings.staffLogin}</Text>
+                  </Text>
+                </Pressable>
+              </>
+            ) : null}
+          </View>
         </ScrollView>
-      </SafeAreaView>
-    );
-  }
-
-  return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.eyebrow}>{strings.appName.toUpperCase()}</Text>
-        <Text style={styles.title}>{strings.welcome}</Text>
-        <Text style={styles.subtitle}>{strings.chooseRole}</Text>
-
-        <View style={styles.roleList}>
-          {roles.map(role => (
-            <Pressable
-              accessibilityRole="button"
-              key={role.id}
-              onPress={() => setSelectedRole(role)}
-              style={({ pressed }) => [
-                styles.roleCard,
-                pressed && styles.roleCardPressed,
-              ]}
-              testID={`role-${role.id}`}>
-              <View style={styles.roleCardText}>
-                <Text style={styles.roleTitle}>{role.title}</Text>
-                <Text style={styles.roleDescription}>{role.description}</Text>
-              </View>
-              <Text style={styles.chevron}>›</Text>
-            </Pressable>
-          ))}
-        </View>
-      </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
