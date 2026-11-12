@@ -17,6 +17,7 @@ import {
 jest.mock('../Src/services/firebase/parentMonitoring', () => ({
   approveRegistrationRequest: jest.fn(),
   createParentAccount: jest.fn().mockResolvedValue(undefined),
+  createTeacherAccount: jest.fn().mockResolvedValue(undefined),
   declineRegistrationRequest: jest.fn(),
   allocateHostelRoom: jest.fn(),
   allocateApprovedHostelRequest: jest.fn(),
@@ -240,6 +241,48 @@ test('teacher login routes to the teacher dashboard only for a verified teacher 
   expect(signInForRole).toHaveBeenCalledWith('', '', 'teacher');
   expect(renderer.root.findByProps({ testID: 'teacher-exit' })).toBeTruthy();
   expect(() => renderer.root.findByProps({ testID: 'admin-tab-students' })).toThrow();
+});
+
+test('teacher login stays on the teacher screen when auth cleanup reports signed out', async () => {
+  const verificationError = new Error('Email verification is required.');
+  verificationError.code = 'auth/email-not-verified';
+  verificationError.email = 'teacher@example.com';
+  signInForRole.mockRejectedValue(verificationError);
+
+  let authSessionListener;
+  subscribeToAuthSession.mockImplementationOnce(onSession => {
+    authSessionListener = onSession;
+    onSession(null);
+    return jest.fn();
+  });
+
+  let renderer;
+  ReactTestRenderer.act(() => {
+    renderer = ReactTestRenderer.create(<App />);
+  });
+  ReactTestRenderer.act(() => {
+    renderer.root.findByProps({ testID: 'staff-login' }).props.onPress();
+  });
+  ReactTestRenderer.act(() => {
+    renderer.root.findByProps({ testID: 'staff-role-teacher' }).props.onPress();
+  });
+
+  ReactTestRenderer.act(() => authSessionListener(null));
+  await ReactTestRenderer.act(async () => {
+    await renderer.root.findByProps({ testID: 'auth-submit' }).props.onPress();
+  });
+
+  expect(renderer.root.findByProps({ testID: 'auth-submit' })).toBeTruthy();
+  expect(renderer.root.findByProps({ testID: 'back-button' })).toBeTruthy();
+  expect(
+    renderer.root
+      .findAllByType(Text)
+      .some(text =>
+        text.props.children
+          ?.toString()
+          .includes('verification link to teacher@example.com'),
+      ),
+  ).toBe(true);
 });
 
 test('selected staff category cannot open a dashboard for a different Firestore role', async () => {

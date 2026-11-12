@@ -4,10 +4,13 @@ import {
   approveRegistrationRequest,
   createParentAccount,
   createParentHostelRequest,
+  createTeacherAccount,
   declineRegistrationRequest,
+  removeTeacherProfile,
   reviewHostelRequest,
   removeStudent,
   saveStudent,
+  saveTeacherProfile,
   sendParentPasswordReset,
   signInForRole,
   subscribeToAuthSession,
@@ -16,6 +19,9 @@ import {
 import { getFirebaseServices } from '../Src/services/firebase/firebase';
 import {
   createUserWithEmailAndPassword,
+  deleteUser,
+  initializeAuth,
+  inMemoryPersistence,
   onAuthStateChanged,
   reload,
   sendEmailVerification,
@@ -23,6 +29,7 @@ import {
   signInWithEmailAndPassword,
   signOut,
 } from 'firebase/auth';
+import { deleteApp, initializeApp } from 'firebase/app';
 import {
   collection,
   doc,
@@ -30,7 +37,13 @@ import {
   onSnapshot,
   runTransaction,
   setDoc,
+  writeBatch,
 } from 'firebase/firestore';
+
+jest.mock('firebase/app', () => ({
+  deleteApp: jest.fn(),
+  initializeApp: jest.fn(),
+}));
 
 jest.mock('../Src/services/firebase/firebase', () => ({
   getFirebaseServices: jest.fn(),
@@ -38,6 +51,9 @@ jest.mock('../Src/services/firebase/firebase', () => ({
 
 jest.mock('firebase/auth', () => ({
   createUserWithEmailAndPassword: jest.fn(),
+  deleteUser: jest.fn(),
+  initializeAuth: jest.fn(),
+  inMemoryPersistence: 'in-memory-persistence',
   sendEmailVerification: jest.fn(),
   sendPasswordResetEmail: jest.fn(),
   onAuthStateChanged: jest.fn(),
@@ -54,6 +70,7 @@ jest.mock('firebase/firestore', () => ({
   runTransaction: jest.fn(),
   setDoc: jest.fn(),
   updateDoc: jest.fn(),
+  writeBatch: jest.fn(),
 }));
 
 let transaction;
@@ -91,6 +108,10 @@ beforeEach(() => {
     args.length === 1 ? { id: 'registration-1' } : 'parent-profile',
   );
   setDoc.mockResolvedValue(undefined);
+  initializeApp.mockReturnValue('secondary-app');
+  deleteApp.mockResolvedValue(undefined);
+  initializeAuth.mockReturnValue('secondary-auth');
+  deleteUser.mockResolvedValue(undefined);
 });
 
 test('sends a password reset email to the normalized parent email', async () => {
@@ -130,6 +151,50 @@ test('student edits preserve the existing hostel status in both records', async 
   );
 });
 
+test('assigning a student updates its teacher ID and both teachers’ student lists', async () => {
+  getFirebaseServices.mockReturnValue({
+    auth: { currentUser: { uid: 'admin-1' } },
+    db: 'admin-db',
+  });
+  doc.mockImplementation((_db, collectionName, id) => `${collectionName}/${id}`);
+  const snapshots = {
+    'students/student-1': {
+      exists: () => true,
+      data: () => ({ teacherId: 'teacher-old', hostelStatus: 'day' }),
+    },
+    'hostelRegistrations/student-1': { exists: () => false },
+    'users/teacher-old': {
+      exists: () => true,
+      data: () => ({ role: 'teacher', studentIds: ['student-1', 'student-2'] }),
+    },
+    'users/teacher-new': {
+      exists: () => true,
+      data: () => ({ role: 'teacher', studentIds: ['student-3'] }),
+    },
+  };
+  transaction.get.mockImplementation(reference =>
+    Promise.resolve(snapshots[reference]),
+  );
+
+  await saveStudent({
+    id: 'student-1',
+    studentName: 'Amina Ahmed',
+    fatherName: 'Ahmed',
+    teacherId: 'teacher-new',
+  });
+
+  expect(transaction.set).toHaveBeenCalledWith(
+    'students/student-1',
+    expect.objectContaining({ teacherId: 'teacher-new' }),
+  );
+  expect(transaction.update).toHaveBeenCalledWith('users/teacher-old', {
+    studentIds: ['student-2'],
+  });
+  expect(transaction.update).toHaveBeenCalledWith('users/teacher-new', {
+    studentIds: ['student-3', 'student-1'],
+  });
+});
+
 test('student deletion is blocked while a hostel registration exists', async () => {
   getFirebaseServices.mockReturnValue({
     auth: { currentUser: { uid: 'admin-1' } },
@@ -150,6 +215,104 @@ test('requires an email address before requesting a parent password reset', asyn
     'Enter your parent account email address first.',
   );
   expect(sendPasswordResetEmail).not.toHaveBeenCalled();
+});
+
+test('creates a teacher account in a separate Auth instance and writes linked profiles', async () => {
+  const adminAuth = { currentUser: { uid: 'admin-1' } };
+  getFirebaseServices.mockReturnValue({ auth: adminAuth, db: 'admin-db' });
+  const teacherUser = { uid: 'teacher-1', email: 'teacher@example.com' };
+  createUserWithEmailAndPassword.mockResolvedValue({ user: teacherUser });
+  const batch = { set: jest.fn(), commit: jest.fn().mockResolvedValue(undefined) };
+  writeBatch.mockReturnValue(batch);
+  doc.mockImplementation((_db, collectionName, uid) => `${collectionName}/${uid}`);
+
+  const teacher = await createTeacherAccount(
+    {
+      name: 'Teacher One',
+      email: ' Teacher@Example.com ',
+      contactNumber: '123456789',
+      subjects: ['Quran'],
+      assignedPrograms: ['hifz'],
+      assignedClasses: ['1'],
+    },
+    'secure123',
+  );
+
+  expect(createUserWithEmailAndPassword).toHaveBeenCalledWith(
+    'secondary-auth',
+    'teacher@example.com',
+    'secure123',
+  );
+  expect(initializeAuth).toHaveBeenCalledWith('secondary-app', {
+    persistence: inMemoryPersistence,
+  });
+  expect(sendEmailVerification).toHaveBeenCalledWith(teacherUser);
+  expect(batch.set).toHaveBeenNthCalledWith(
+    1,
+    'users/teacher-1',
+    expect.objectContaining({ email: 'teacher@example.com', role: 'teacher' }),
+  );
+  expect(batch.set).toHaveBeenNthCalledWith(
+    2,
+    'teachers/teacher-1',
+    expect.objectContaining({ email: 'teacher@example.com', id: 'teacher-1' }),
+  );
+  expect(batch.commit).toHaveBeenCalledTimes(1);
+  expect(teacher).not.toHaveProperty('password');
+  expect(batch.set.mock.calls.map(([, data]) => data)).not.toContainEqual(
+    expect.objectContaining({ password: 'secure123' }),
+  );
+  expect(adminAuth.currentUser.uid).toBe('admin-1');
+  expect(signOut).not.toHaveBeenCalled();
+  expect(deleteApp).toHaveBeenCalledWith('secondary-app');
+});
+
+test('teacher profile edits sync class assignments to the linked teacher role profile', async () => {
+  getFirebaseServices.mockReturnValue({
+    auth: { currentUser: { uid: 'admin-1' } },
+    db: 'admin-db',
+  });
+  doc.mockImplementation((_db, collectionName, uid) => `${collectionName}/${uid}`);
+  transaction.get.mockResolvedValue({
+    exists: () => true,
+    data: () => ({ role: 'teacher' }),
+  });
+
+  await saveTeacherProfile({
+    id: 'teacher-1',
+    email: 'teacher@example.com',
+    name: 'Teacher One',
+    contactNumber: '123456789',
+    subjects: ['Quran'],
+    assignedPrograms: ['hifz'],
+    assignedClasses: ['2'],
+  });
+
+  expect(transaction.update).toHaveBeenCalledWith(
+    'users/teacher-1',
+    expect.objectContaining({
+      email: 'teacher@example.com',
+      assignedClasses: ['2'],
+    }),
+  );
+});
+
+test('removing a teacher also removes their app role profile', async () => {
+  getFirebaseServices.mockReturnValue({
+    auth: { currentUser: { uid: 'admin-1' } },
+    db: 'admin-db',
+  });
+  doc.mockImplementation((_db, collectionName, uid) => `${collectionName}/${uid}`);
+  const batch = {
+    delete: jest.fn(),
+    commit: jest.fn().mockResolvedValue(undefined),
+  };
+  writeBatch.mockReturnValue(batch);
+
+  await removeTeacherProfile('teacher-1');
+
+  expect(batch.delete).toHaveBeenNthCalledWith(1, 'teachers/teacher-1');
+  expect(batch.delete).toHaveBeenNthCalledWith(2, 'users/teacher-1');
 });
 
 test('restores a verified Firebase session using its Firestore role', async () => {
@@ -222,6 +385,37 @@ test('teacher subscriptions listen only to student IDs assigned in the trusted p
     'users/teacher-1',
     'students/student-1',
   ]);
+  expect(onChange).toHaveBeenLastCalledWith([
+    { id: 'student-1', studentName: 'Amina Ahmed' },
+  ]);
+  unsubscribe();
+});
+
+test('teacher subscriptions show students when the assigned ID list updates', () => {
+  getFirebaseServices.mockReturnValue({ auth: {}, db: {} });
+  doc.mockImplementation((_db, ...segments) => segments.join('/'));
+  const listeners = new Map();
+  onSnapshot.mockImplementation((reference, onNext) => {
+    listeners.set(reference, onNext);
+    return jest.fn();
+  });
+  const onChange = jest.fn();
+
+  const unsubscribe = subscribeToTeacherStudents(
+    'teacher-1',
+    onChange,
+    jest.fn(),
+  );
+  listeners.get('users/teacher-1')({
+    exists: () => true,
+    data: () => ({ role: 'teacher', studentIds: ['student-1'] }),
+  });
+  listeners.get('students/student-1')({
+    exists: () => true,
+    id: 'student-1',
+    data: () => ({ studentName: 'Amina Ahmed' }),
+  });
+
   expect(onChange).toHaveBeenLastCalledWith([
     { id: 'student-1', studentName: 'Amina Ahmed' },
   ]);
@@ -761,14 +955,28 @@ test('creates an unlinked parent profile only after verified parent sign-in', as
   expect(getIdToken).toHaveBeenCalledWith(true);
 });
 
-test('rejects accounts without the requested role and signs them out', async () => {
+test('reports the stored role when it does not match the requested role', async () => {
   getDoc.mockResolvedValue({
     exists: () => true,
     data: () => ({ role: 'teacher' }),
   });
   await expect(
     signInForRole('parent@example.com', 'secret123', 'parent'),
-  ).rejects.toThrow('not authorized to sign in as parent');
+  ).rejects.toThrow(
+    'This account has the "teacher" role in Firestore, not "parent".',
+  );
+
+  expect(signOut).toHaveBeenCalled();
+});
+
+test('explains how an administrator can provision a missing teacher role profile', async () => {
+  getDoc.mockResolvedValue({ exists: () => false });
+
+  await expect(
+    signInForRole('teacher@example.com', 'secret123', 'teacher'),
+  ).rejects.toThrow(
+    'no role profile at users/parent-1. Create the teacher account from Admin > Teachers > Add',
+  );
 
   expect(signOut).toHaveBeenCalled();
 });

@@ -16,6 +16,7 @@ import {
   allocateHostelRoom,
   createParentAccount,
   createHostelRoom,
+  createTeacherAccount,
   declineRegistrationRequest,
   recordHostelVisitor,
   removeTeacherProfile,
@@ -70,9 +71,6 @@ export default function App() {
       }
       setAuthSession(session);
       setActiveScreen(session?.role || 'login');
-      if (!session) {
-        setLoginRoute('parent');
-      }
       setIsAuthReady(true);
       if (session) {
         setBackendNotice('');
@@ -85,7 +83,6 @@ export default function App() {
         error => {
           if (isMounted) {
             setAuthSession(null);
-            setLoginRoute('parent');
             setActiveScreen('login');
             setBackendNotice(error.message);
             setIsAuthReady(true);
@@ -280,9 +277,8 @@ export default function App() {
     await removeStudentRecord(studentId);
   }
 
-  async function addTeacher(teacher) {
-    const newTeacher = { ...teacher, id: `teacher-${Date.now()}` };
-    await saveTeacherProfile(newTeacher);
+  async function addTeacher(teacher, password) {
+    await createTeacherAccount(teacher, password);
   }
 
   async function updateTeacher(updatedTeacher) {

@@ -125,8 +125,13 @@ export async function signInForRole(email, password, expectedRole) {
       accountRole === expectedRole ||
       (expectedRole === 'admin' && accountRole === 'hostelAdmin');
     if (!roleMatches) {
+      if (!userSnapshot.exists()) {
+        throw new Error(
+          `This Firebase account has no role profile at users/${credential.user.uid}. Create the teacher account from Admin > Teachers > Add, or ask an administrator to set role: "teacher" on that exact Firestore document.`,
+        );
+      }
       throw new Error(
-        `This account is not authorized to sign in as ${expectedRole}.`,
+        `This account has the "${accountRole || 'no role'}" role in Firestore, not "${expectedRole}". An administrator must correct users/${credential.user.uid} in the app's Firebase project.`,
       );
     }
 
@@ -139,7 +144,7 @@ export async function signInForRole(email, password, expectedRole) {
     await signOut(auth);
     if (error.code === 'permission-denied') {
       throw new Error(
-        'Firestore denied parent profile access. Publish the latest firestore.rules to the Firebase project configured in the app, then try again.',
+        `Firestore denied access to this account's role profile. Confirm the app and Firestore Console use the same Firebase project. Publish the latest firestore.rules and try again. Details: ${error.message || error.code}`,
       );
     }
     throw error;
@@ -637,18 +642,41 @@ export async function saveStudent(student) {
   const studentRef = doc(db, 'students', student.id);
   const rosterRef = doc(db, 'hostelStudentRoster', student.id);
   const registrationRef = doc(db, 'hostelRegistrations', student.id);
+  const teacherId = student.teacherId || '';
+  if (typeof teacherId !== 'string' || teacherId.includes('/')) {
+    throw new Error('Select a valid teacher for this student.');
+  }
+
   await runTransaction(db, async transaction => {
     const [existingStudent, registration] = await Promise.all([
       transaction.get(studentRef),
       transaction.get(registrationRef),
     ]);
+    const previousTeacherId = existingStudent.exists()
+      ? existingStudent.data().teacherId || ''
+      : '';
+    const linkedTeacherIds = [
+      ...new Set([previousTeacherId, teacherId].filter(Boolean)),
+    ];
+    const teacherProfiles = await Promise.all(
+      linkedTeacherIds.map(id => transaction.get(doc(db, 'users', id))),
+    );
+    const nextTeacherIndex = linkedTeacherIds.indexOf(teacherId);
+    if (
+      teacherId &&
+      (!teacherProfiles[nextTeacherIndex].exists() ||
+        teacherProfiles[nextTeacherIndex].data().role !== 'teacher')
+    ) {
+      throw new Error('The selected teacher account is unavailable.');
+    }
+
     const hostelStatus =
       registration.exists() ||
       (existingStudent.exists() &&
         existingStudent.data().hostelStatus === 'resident')
         ? 'resident'
         : 'day';
-    const savedStudent = { ...student, hostelStatus };
+    const savedStudent = { ...student, teacherId, hostelStatus };
     transaction.set(studentRef, savedStudent);
     transaction.set(rosterRef, {
       id: student.id,
@@ -659,6 +687,25 @@ export async function saveStudent(student) {
       contactNumber: student.contactNumber || '',
       hostelStatus,
     });
+
+    linkedTeacherIds.forEach((linkedTeacherId, index) => {
+      const teacherProfile = teacherProfiles[index];
+      if (!teacherProfile.exists() || teacherProfile.data().role !== 'teacher') {
+        return;
+      }
+
+      const studentIds = Array.isArray(teacherProfile.data().studentIds)
+        ? teacherProfile.data().studentIds.filter(
+            id => typeof id === 'string' && id !== student.id,
+          )
+        : [];
+      if (linkedTeacherId === teacherId) {
+        studentIds.push(student.id);
+      }
+      transaction.update(doc(db, 'users', linkedTeacherId), {
+        studentIds: [...new Set(studentIds)],
+      });
+    });
   });
 }
 
@@ -668,8 +715,120 @@ export async function saveTeacherProfile(teacher) {
     throw new Error('An authenticated administrator and teacher ID are required.');
   }
 
-  const { doc, setDoc } = require('firebase/firestore');
-  await setDoc(doc(db, 'teachers', teacher.id), teacher);
+  const { doc, runTransaction } = require('firebase/firestore');
+  await runTransaction(db, async transaction => {
+    const userRef = doc(db, 'users', teacher.id);
+    const userProfile = await transaction.get(userRef);
+    transaction.set(doc(db, 'teachers', teacher.id), teacher);
+    if (userProfile.exists() && userProfile.data().role === 'teacher') {
+      transaction.update(userRef, getTeacherRoleProfile(teacher));
+    }
+  });
+}
+
+function getTeacherRoleProfile(teacher) {
+  return {
+    email: teacher.email || '',
+    name: teacher.name.trim(),
+    contactNumber: teacher.contactNumber.trim(),
+    subjects: teacher.subjects || [],
+    assignedPrograms: teacher.assignedPrograms || [],
+    assignedClasses: teacher.assignedClasses || [],
+  };
+}
+
+export async function createTeacherAccount(teacher, password) {
+  const { auth, db } = getFirebaseServices();
+  if (!auth.currentUser) {
+    throw new Error('An authenticated administrator is required.');
+  }
+  if (!teacher?.name?.trim() || !teacher?.contactNumber?.trim()) {
+    throw new Error('Teacher name and contact number are required.');
+  }
+  const email = teacher.email?.trim().toLowerCase();
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error('Enter a valid teacher email address.');
+  }
+  if (typeof password !== 'string' || password.length < 6) {
+    throw new Error('The initial password must be at least 6 characters.');
+  }
+
+  const { initializeApp, deleteApp } = require('firebase/app');
+  const {
+    createUserWithEmailAndPassword,
+    deleteUser,
+    initializeAuth,
+    inMemoryPersistence,
+    sendEmailVerification,
+  } = require('firebase/auth');
+  const { doc, writeBatch } = require('firebase/firestore');
+  const firebaseConfig = require('./firebaseConfig').default;
+  const secondaryApp = initializeApp(
+    firebaseConfig,
+    `teacher-provisioning-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+  let teacherUser;
+
+  try {
+    const secondaryAuth = initializeAuth(secondaryApp, {
+      persistence: inMemoryPersistence,
+    });
+    const credential = await createUserWithEmailAndPassword(
+      secondaryAuth,
+      email,
+      password,
+    );
+    teacherUser = credential.user;
+    await sendEmailVerification(teacherUser);
+
+    const teacherRecord = {
+      id: teacherUser.uid,
+      email,
+      name: teacher.name.trim(),
+      qualification: teacher.qualification || '',
+      experience: teacher.experience || '',
+      contactNumber: teacher.contactNumber.trim(),
+      subjects: teacher.subjects || [],
+      salary: teacher.salary || '',
+      assignedPrograms: teacher.assignedPrograms || [],
+      assignedClasses: teacher.assignedClasses || [],
+    };
+    const teacherProfile = {
+      ...getTeacherRoleProfile(teacherRecord),
+      email,
+      role: 'teacher',
+      studentIds: [],
+    };
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'users', teacherUser.uid), teacherProfile);
+    batch.set(doc(db, 'teachers', teacherUser.uid), teacherRecord);
+    await batch.commit();
+
+    return teacherRecord;
+  } catch (error) {
+    if (teacherUser) {
+      try {
+        await deleteUser(teacherUser);
+      } catch (cleanupError) {
+        throw new Error(
+          `Teacher setup failed: ${error.message}. Firebase could not remove the incomplete authentication account: ${cleanupError.message}. Check Firebase before retrying.`,
+        );
+      }
+    }
+
+    if (error.code === 'auth/email-already-in-use') {
+      throw new Error('An account with this email address already exists.');
+    }
+    if (error.code === 'auth/invalid-email') {
+      throw new Error('Enter a valid teacher email address.');
+    }
+    if (error.code === 'auth/weak-password') {
+      throw new Error('The initial password must be at least 6 characters.');
+    }
+    throw error;
+  } finally {
+    await deleteApp(secondaryApp);
+  }
 }
 
 export async function removeTeacherProfile(teacherId) {
@@ -678,8 +837,11 @@ export async function removeTeacherProfile(teacherId) {
     throw new Error('An authenticated administrator and teacher ID are required.');
   }
 
-  const { deleteDoc, doc } = require('firebase/firestore');
-  await deleteDoc(doc(db, 'teachers', teacherId));
+  const { doc, writeBatch } = require('firebase/firestore');
+  const batch = writeBatch(db);
+  batch.delete(doc(db, 'teachers', teacherId));
+  batch.delete(doc(db, 'users', teacherId));
+  await batch.commit();
 }
 
 export async function saveFinancialRecord(record) {

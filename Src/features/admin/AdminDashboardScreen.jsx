@@ -37,12 +37,15 @@ const emptyStudent = {
   contactNumber: '',
   program: '',
   className: '',
+  teacherId: '',
   hostelStatus: 'day',
   photoUri: '',
 };
 
 const emptyTeacher = {
   name: '',
+  email: '',
+  password: '',
   qualification: '',
   experience: '',
   contactNumber: '',
@@ -83,17 +86,25 @@ function FormField({
   placeholder,
   keyboardType,
   multiline,
+  secureTextEntry,
+  autoComplete,
   testID,
 }) {
   return (
     <>
       <Text style={styles.fieldLabel}>{label}</Text>
       <TextInput
-        autoCapitalize={keyboardType === 'email-address' ? 'none' : 'sentences'}
+        autoCapitalize={
+          keyboardType === 'email-address' || secureTextEntry
+            ? 'none'
+            : 'sentences'
+        }
+        autoComplete={autoComplete}
         keyboardType={keyboardType || 'default'}
         multiline={multiline}
         onChangeText={onChangeText}
         placeholder={placeholder || label}
+        secureTextEntry={secureTextEntry}
         style={[styles.formInput, multiline && styles.formInputMultiline]}
         testID={testID}
         value={value}
@@ -126,6 +137,60 @@ function ChoiceGrid({ items, selected, onSelect, testPrefix }) {
   );
 }
 
+function TeacherPicker({ teachers, selectedTeacherId, onSelect }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const selectedTeacher = teachers.find(
+    teacher => teacher.id === selectedTeacherId,
+  );
+
+  return (
+    <View>
+      <Text style={styles.fieldLabel}>Assign Teacher</Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: isOpen }}
+        onPress={() => setIsOpen(value => !value)}
+        style={styles.teacherPicker}
+        testID="student-teacher-picker">
+        <Text style={styles.teacherPickerText}>
+          {selectedTeacher?.name || 'Unassigned'}
+        </Text>
+        <Text style={styles.teacherPickerChevron}>{isOpen ? '⌃' : '⌄'}</Text>
+      </Pressable>
+      {isOpen ? (
+        <View style={styles.teacherPickerOptions}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              onSelect('');
+              setIsOpen(false);
+            }}
+            style={styles.teacherPickerOption}
+            testID="student-teacher-unassigned">
+            <Text style={styles.teacherPickerOptionText}>Unassigned</Text>
+          </Pressable>
+          {teachers.map(teacher => (
+            <Pressable
+              accessibilityRole="button"
+              key={teacher.id}
+              onPress={() => {
+                onSelect(teacher.id);
+                setIsOpen(false);
+              }}
+              style={styles.teacherPickerOption}
+              testID={`student-teacher-option-${teacher.id}`}>
+              <Text style={styles.teacherPickerOptionText}>{teacher.name}</Text>
+            </Pressable>
+          ))}
+          {teachers.length === 0 ? (
+            <Text style={styles.teacherPickerEmpty}>No teachers available.</Text>
+          ) : null}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 export default function AdminDashboardScreen({
   language,
   isAuthenticated,
@@ -143,7 +208,7 @@ export default function AdminDashboardScreen({
   onDeleteFinancialRecord,
   registrationRequests,
   students,
-  teachers,
+  teachers = [],
   backendNotice,
   hostelRooms,
   hostelRegistrations,
@@ -165,6 +230,7 @@ export default function AdminDashboardScreen({
   const [studentSearch, setStudentSearch] = useState('');
   const [studentForm, setStudentForm] = useState(null);
   const [teacherForm, setTeacherForm] = useState(null);
+  const [isSavingTeacher, setIsSavingTeacher] = useState(false);
   const [notice, setNotice] = useState('');
 
   // Search across common student details without changing the saved records.
@@ -313,30 +379,57 @@ export default function AdminDashboardScreen({
   async function saveTeacher() {
     // Convert the comma-separated subjects field into a clean list before saving.
     const { values, mode } = teacherForm;
+    if (isSavingTeacher) {
+      return;
+    }
     if (!values.name.trim() || !values.contactNumber.trim()) {
       setNotice('Enter the teacher name and contact number.');
       return;
     }
 
+    const email = (values.email || '').trim().toLowerCase();
+    const password = values.password;
+    if (
+      mode === 'add' &&
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+    ) {
+      setNotice('Enter a valid teacher email address.');
+      return;
+    }
+    if (mode === 'add' && password.length < 6) {
+      setNotice('The initial password must be at least 6 characters.');
+      return;
+    }
+
+    const { email: savedEmail, password: teacherPassword, ...profileValues } =
+      values;
     const teacher = {
-      ...values,
-      subjects: values.subjects
+      ...profileValues,
+      ...(mode === 'add' ? { email } : savedEmail ? { email: savedEmail } : {}),
+      subjects: (values.subjects || '')
         .split(',')
         .map(subject => subject.trim())
         .filter(Boolean),
     };
+    setIsSavingTeacher(true);
     try {
       if (mode === 'edit') {
         await onUpdateTeacher(teacher);
       } else {
-        await onAddTeacher(teacher);
+        await onAddTeacher(teacher, teacherPassword);
       }
     } catch (error) {
-      setNotice(`Could not save teacher profile: ${error.message}`);
+      setNotice(`Could not ${mode === 'edit' ? 'save' : 'create'} teacher account: ${error.message}`);
+      setIsSavingTeacher(false);
       return;
     }
+    setIsSavingTeacher(false);
     setTeacherForm(null);
-    setNotice(mode === 'edit' ? 'Teacher profile updated.' : 'Teacher added.');
+    setNotice(
+      mode === 'edit'
+        ? 'Teacher profile updated.'
+        : `Teacher account created. A verification email was sent to ${email}.`,
+    );
   }
 
   function confirmDeleteTeacher(teacher) {
@@ -527,6 +620,11 @@ export default function AdminDashboardScreen({
             />
           </>
         )}
+        <TeacherPicker
+          teachers={teachers}
+          selectedTeacherId={values.teacherId || ''}
+          onSelect={teacherId => updateStudentField('teacherId', teacherId)}
+        />
         <Text style={styles.fieldLabel}>
           Hostel status: {values.hostelStatus === 'resident' ? 'Hostel resident' : 'Day student'}
         </Text>
@@ -577,6 +675,7 @@ export default function AdminDashboardScreen({
             <StudentCard
               key={student.id}
               student={student}
+              teacher={teachers.find(item => item.id === student.teacherId)}
               onEdit={() => startStudentForm(student)}
               onDelete={() => confirmDeleteStudent(student)}
             />
@@ -603,6 +702,26 @@ export default function AdminDashboardScreen({
           onChangeText={value => updateTeacherField('name', value)}
           testID="teacher-name"
         />
+        {teacherForm.mode === 'add' ? (
+          <>
+            <FormField
+              label="Email"
+              value={values.email}
+              keyboardType="email-address"
+              autoComplete="email"
+              onChangeText={value => updateTeacherField('email', value)}
+              testID="teacher-email"
+            />
+            <FormField
+              label="Initial password"
+              value={values.password}
+              autoComplete="new-password"
+              secureTextEntry
+              onChangeText={value => updateTeacherField('password', value)}
+              testID="teacher-password"
+            />
+          </>
+        ) : null}
         <FormField
           label="Qualification"
           value={values.qualification}
@@ -653,7 +772,15 @@ export default function AdminDashboardScreen({
         />
         <View style={styles.formActions}>
           <ActionButton
-            label={teacherForm.mode === 'edit' ? 'Save changes' : 'Add teacher'}
+            label={
+              isSavingTeacher
+                ? teacherForm.mode === 'edit'
+                  ? 'Saving...'
+                  : 'Creating account...'
+                : teacherForm.mode === 'edit'
+                  ? 'Save changes'
+                  : 'Add teacher'
+            }
             onPress={saveTeacher}
             testID="save-teacher"
           />
@@ -858,7 +985,7 @@ function RegistrationCard({
   );
 }
 
-function StudentCard({ student, onEdit, onDelete }) {
+function StudentCard({ student, teacher, onEdit, onDelete }) {
   return (
     <View style={styles.recordCard}>
       <View style={styles.recordHeader}>
@@ -884,6 +1011,9 @@ function StudentCard({ student, onEdit, onDelete }) {
         {student.contactNumber || 'No contact number'} ·{' '}
         {student.hostelStatus === 'resident' ? 'Hostel resident' : 'Day student'}
       </Text>
+      <Text style={styles.recordDetail} testID={`student-assigned-teacher-${student.id}`}>
+        Assigned teacher: {teacher?.name || 'Unassigned'}
+      </Text>
       <View style={styles.recordActions}>
         <ActionButton label="Edit" onPress={onEdit} variant="secondary" testID={`edit-student-${student.id}`} />
         <ActionButton label="Delete" onPress={onDelete} variant="danger" testID={`delete-student-${student.id}`} />
@@ -907,6 +1037,9 @@ function TeacherCard({ teacher, onEdit, onDelete }) {
         {teacher.qualification || 'Qualification not specified'}
         {teacher.experience ? ` · ${teacher.experience}` : ''}
       </Text>
+      {teacher.email ? (
+        <Text style={styles.recordDetail}>Email: {teacher.email}</Text>
+      ) : null}
       <Text style={styles.recordDetail}>Contact: {teacher.contactNumber}</Text>
       <Text style={styles.recordDetail}>
         Subjects: {subjectsText || 'Not assigned'}
